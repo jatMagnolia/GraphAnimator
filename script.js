@@ -2,12 +2,12 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const draggableBox = document.getElementById('draggableBox');
 const draggableCircle = document.getElementById('draggableCircle');
+const draggableText = document.getElementById('draggableText');
 const canvasContainer = document.querySelector('.canvas-container');
 const textEditor = document.getElementById('textEditor');
 const colorPicker = document.getElementById('colorPicker');
 const selectTool = document.getElementById('selectTool');
 const lassoTool = document.getElementById('lassoTool');
-const textTool = document.getElementById('textTool');
 const arrowDirectionPanel = document.getElementById('arrowDirectionPanel');
 
 // Set canvas size
@@ -21,11 +21,14 @@ resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 
 // Tool state
-let currentTool = 'select'; // 'select', 'lasso', 'text'
+let currentTool = 'select'; // 'select', 'lasso'
 let selectedShapes = new Set(); // Can contain Box, Circle, or TextObject
 let selectedConnections = new Set(); // Can contain Connection objects
 let isDragging = false;
 let dragOffset = { x: 0, y: 0 };
+let dragStartPos = { x: 0, y: 0 }; // Store initial drag position
+let dragStartShapes = []; // Store initial positions of shapes when drag starts
+let dragStartLassoPoints = null; // Store initial lasso points when drag starts
 let isPanning = false;
 let panStart = { x: 0, y: 0 };
 let panOffset = { x: 0, y: 0 };
@@ -36,6 +39,8 @@ let currentColor = '#667eea';
 // Lasso selection
 let isLassoActive = false;
 let lassoPoints = [];
+let completedLassoPoints = null; // Store completed lasso shape
+let lassoBlinkAnimation = 0; // For blinking effect
 
 // Connection state
 let connections = [];
@@ -77,6 +82,7 @@ class Box extends DrawableObject {
         this.width = 80;
         this.height = 80;
         this.color = currentColor;
+        this.text = '';
     }
 
     draw(isSelected = false) {
@@ -86,6 +92,28 @@ class Box extends DrawableObject {
         ctx.strokeStyle = isSelected ? '#48bb78' : '#333';
         ctx.lineWidth = isSelected ? 3 : 2;
         ctx.strokeRect(this.x + canvasOffset.x, this.y + canvasOffset.y, this.width, this.height);
+        
+        // Draw text if it exists
+        if (this.text) {
+            ctx.fillStyle = 'white';
+            ctx.font = '16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // Handle text overflow - truncate if too long
+            const maxWidth = this.width - 10;
+            let displayText = this.text;
+            const metrics = ctx.measureText(displayText);
+            if (metrics.width > maxWidth) {
+                // Truncate text with ellipsis
+                while (ctx.measureText(displayText + '...').width > maxWidth && displayText.length > 0) {
+                    displayText = displayText.slice(0, -1);
+                }
+                displayText = displayText + '...';
+            }
+            
+            ctx.fillText(displayText, this.x + canvasOffset.x + this.width / 2, this.y + canvasOffset.y + this.height / 2);
+        }
     }
 
     contains(x, y) {
@@ -184,6 +212,7 @@ class Circle extends DrawableObject {
         super(x, y);
         this.radius = 40;
         this.color = currentColor;
+        this.text = '';
     }
 
     draw(isSelected = false) {
@@ -195,6 +224,28 @@ class Circle extends DrawableObject {
         ctx.strokeStyle = isSelected ? '#48bb78' : '#333';
         ctx.lineWidth = isSelected ? 3 : 2;
         ctx.stroke();
+        
+        // Draw text if it exists
+        if (this.text) {
+            ctx.fillStyle = 'white';
+            ctx.font = '16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // Handle text overflow - truncate if too long
+            const maxWidth = this.radius * 1.8;
+            let displayText = this.text;
+            const metrics = ctx.measureText(displayText);
+            if (metrics.width > maxWidth) {
+                // Truncate text with ellipsis
+                while (ctx.measureText(displayText + '...').width > maxWidth && displayText.length > 0) {
+                    displayText = displayText.slice(0, -1);
+                }
+                displayText = displayText + '...';
+            }
+            
+            ctx.fillText(displayText, this.x + canvasOffset.x + this.radius, this.y + canvasOffset.y + this.radius);
+        }
     }
 
     contains(x, y) {
@@ -451,9 +502,41 @@ class Connection {
     }
 }
 
+// Draw grid background (1 inch = 96 pixels at 96 DPI)
+function drawGrid() {
+    const gridSize = 96; // 1 inch in pixels
+    ctx.strokeStyle = '#e0e0e0';
+    ctx.lineWidth = 1;
+    
+    // Calculate the visible area considering canvas offset
+    const startX = Math.floor(-canvasOffset.x / gridSize) * gridSize - canvasOffset.x;
+    const startY = Math.floor(-canvasOffset.y / gridSize) * gridSize - canvasOffset.y;
+    const endX = canvas.width - canvasOffset.x;
+    const endY = canvas.height - canvasOffset.y;
+    
+    // Draw vertical lines
+    for (let x = startX; x <= endX; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x + canvasOffset.x, 0);
+        ctx.lineTo(x + canvasOffset.x, canvas.height);
+        ctx.stroke();
+    }
+    
+    // Draw horizontal lines
+    for (let y = startY; y <= endY; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y + canvasOffset.y);
+        ctx.lineTo(canvas.width, y + canvasOffset.y);
+        ctx.stroke();
+    }
+}
+
 // Draw all objects
 function draw(mouseX = null, mouseY = null) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw grid background first
+    drawGrid();
     
     // Draw connections first (behind shapes)
     connections.forEach(conn => conn.draw());
@@ -580,7 +663,7 @@ function draw(mouseX = null, mouseY = null) {
         selectedConnection.draw();
     }
     
-    // Draw lasso selection
+    // Draw active lasso selection (while drawing)
     if (isLassoActive && lassoPoints.length > 1) {
         ctx.strokeStyle = '#667eea';
         ctx.lineWidth = 2;
@@ -594,6 +677,23 @@ function draw(mouseX = null, mouseY = null) {
         ctx.stroke();
         ctx.setLineDash([]);
     }
+    
+    // Draw completed lasso selection with blinking effect
+    if (completedLassoPoints && completedLassoPoints.length > 2 && currentTool === 'lasso') {
+        // Blinking effect: opacity oscillates gently between 0.7 and 1.0
+        const opacity = 0.7 + (Math.sin(lassoBlinkAnimation) + 1) / 2 * 0.3;
+        ctx.strokeStyle = `rgba(102, 126, 234, ${opacity})`;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(completedLassoPoints[0].x, completedLassoPoints[0].y);
+        for (let i = 1; i < completedLassoPoints.length; i++) {
+            ctx.lineTo(completedLassoPoints[i].x, completedLassoPoints[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
 }
 
 // Tool selection
@@ -601,25 +701,24 @@ selectTool.addEventListener('click', () => {
     currentTool = 'select';
     updateToolButtons();
     canvas.style.cursor = 'default';
+    // Clear completed lasso when switching away from lasso tool
+    completedLassoPoints = null;
+    draw();
 });
 
 lassoTool.addEventListener('click', () => {
     currentTool = 'lasso';
     updateToolButtons();
     canvas.style.cursor = 'crosshair';
-});
-
-textTool.addEventListener('click', () => {
-    currentTool = 'text';
-    updateToolButtons();
-    canvas.style.cursor = 'text';
+    // Clear completed lasso when switching to lasso tool
+    completedLassoPoints = null;
+    draw();
 });
 
 function updateToolButtons() {
     document.querySelectorAll('.tool-btn').forEach(btn => btn.classList.remove('active'));
     if (currentTool === 'select') selectTool.classList.add('active');
     if (currentTool === 'lasso') lassoTool.classList.add('active');
-    if (currentTool === 'text') textTool.classList.add('active');
 }
 
 // Color picker
@@ -665,6 +764,16 @@ draggableCircle.addEventListener('dragend', () => {
     draggableCircle.classList.remove('dragging');
 });
 
+draggableText.addEventListener('dragstart', (e) => {
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('shapeType', 'text');
+    draggableText.classList.add('dragging');
+});
+
+draggableText.addEventListener('dragend', () => {
+    draggableText.classList.remove('dragging');
+});
+
 canvasContainer.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
@@ -688,6 +797,13 @@ canvasContainer.addEventListener('drop', (e) => {
         circles.push(new Circle(x, y));
     } else if (shapeType === 'box') {
         boxes.push(new Box(x, y));
+    } else if (shapeType === 'text') {
+        const textObj = new TextObject(x, y);
+        textObjects.push(textObj);
+        selectedShapes.clear();
+        selectedShapes.add(textObj);
+        // Automatically start editing the text after placement
+        startEditingText(textObj);
     }
     draw();
 });
@@ -698,21 +814,32 @@ canvas.addEventListener('mousedown', (e) => {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    if (currentTool === 'text') {
-        // Create text object at click position
-        const worldX = x - canvasOffset.x;
-        const worldY = y - canvasOffset.y;
-        const textObj = new TextObject(worldX, worldY);
-        textObjects.push(textObj);
-        selectedShapes.clear();
-        selectedShapes.add(textObj);
-        startEditingText(textObj);
-        draw();
-        return;
-    }
-    
     if (currentTool === 'lasso') {
-        // Start lasso selection
+        // FIRST check if clicking within completed lasso shape - this must happen before starting new lasso
+        if (completedLassoPoints && completedLassoPoints.length > 2 && isPointInPolygon(x, y, completedLassoPoints)) {
+            // Clicked within completed lasso - allow dragging selected objects
+            if (selectedShapes.size > 0 || selectedConnections.size > 0) {
+                isDragging = true;
+                dragStartPos.x = x;
+                dragStartPos.y = y;
+                // Store initial positions of all selected shapes
+                dragStartShapes = Array.from(selectedShapes).map(shape => ({
+                    shape: shape,
+                    x: shape.x,
+                    y: shape.y
+                }));
+                // Store initial lasso points so we can move them with the objects
+                dragStartLassoPoints = completedLassoPoints.map(point => ({ x: point.x, y: point.y }));
+                canvas.style.cursor = 'grabbing';
+                draw(x, y);
+                return; // Important: return here to prevent starting new lasso
+            }
+            // If clicking within lasso but nothing selected, don't start new lasso - just return
+            return;
+        }
+        // Only start new lasso selection if clicking outside completed lasso
+        // Clear previous completed lasso
+        completedLassoPoints = null;
         isLassoActive = true;
         lassoPoints = [{ x, y }];
         if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
@@ -877,6 +1004,14 @@ canvas.addEventListener('mousedown', (e) => {
             }
             
             isDragging = true;
+            dragStartPos.x = x;
+            dragStartPos.y = y;
+            // Store initial positions of all selected shapes
+            dragStartShapes = Array.from(selectedShapes).map(shape => ({
+                shape: shape,
+                x: shape.x,
+                y: shape.y
+            }));
             dragOffset.x = x - canvasOffset.x - clickedObject.x;
             dragOffset.y = y - canvasOffset.y - clickedObject.y;
             
@@ -952,34 +1087,53 @@ canvas.addEventListener('mousemove', (e) => {
         return;
     }
     
-    if (isDragging && selectedShapes.size > 0) {
-        // Move all selected objects
-        const worldX = x - canvasOffset.x;
-        const worldY = y - canvasOffset.y;
+    if (isDragging && (selectedShapes.size > 0 || selectedConnections.size > 0)) {
+        // Calculate movement delta from initial click position (in screen coordinates)
+        // Since shapes use world coordinates, we need to account for canvas offset
+        const deltaX = x - dragStartPos.x;
+        const deltaY = y - dragStartPos.y;
         
-        selectedShapes.forEach(shape => {
-            shape.x = worldX - dragOffset.x;
-            shape.y = worldY - dragOffset.y;
-            
-            // Keep within reasonable bounds (optional)
-            if (shape instanceof Circle) {
-                shape.x = Math.max(-shape.radius * 2, shape.x);
-                shape.y = Math.max(-shape.radius * 2, shape.y);
-            } else if (shape instanceof Box) {
-                shape.x = Math.max(-shape.width, shape.x);
-                shape.y = Math.max(-shape.height, shape.y);
+        // Move all selected shapes based on their initial positions
+        dragStartShapes.forEach(({ shape, x: startX, y: startY }) => {
+            if (selectedShapes.has(shape)) {
+                shape.x = startX + deltaX;
+                shape.y = startY + deltaY;
+                
+                // Keep within reasonable bounds (optional)
+                if (shape instanceof Circle) {
+                    shape.x = Math.max(-shape.radius * 2, shape.x);
+                    shape.y = Math.max(-shape.radius * 2, shape.y);
+                } else if (shape instanceof Box) {
+                    shape.x = Math.max(-shape.width, shape.x);
+                    shape.y = Math.max(-shape.height, shape.y);
+                }
             }
         });
+        
+        // Move the lasso shape with the objects
+        if (dragStartLassoPoints && completedLassoPoints) {
+            completedLassoPoints = dragStartLassoPoints.map(point => ({
+                x: point.x + deltaX,
+                y: point.y + deltaY
+            }));
+        }
+        
+        // Connections move automatically with their connected shapes, so no need to move them separately
         
         draw(x, y);
         return;
     }
     
     // Update cursor
-    if (currentTool === 'text') {
-        canvas.style.cursor = 'text';
-    } else if (currentTool === 'lasso') {
-        canvas.style.cursor = 'crosshair';
+    if (currentTool === 'lasso') {
+        // Check if hovering over completed lasso with selected objects
+        if (completedLassoPoints && completedLassoPoints.length > 2 && 
+            isPointInPolygon(x, y, completedLassoPoints) && 
+            (selectedShapes.size > 0 || selectedConnections.size > 0)) {
+            canvas.style.cursor = 'grab';
+        } else {
+            canvas.style.cursor = 'crosshair';
+        }
     } else {
         // Check if hovering over edge
         let hoveringEdge = false;
@@ -1093,6 +1247,10 @@ canvas.addEventListener('mouseup', (e) => {
                 }
             });
         }
+        // Store completed lasso shape
+        if (lassoPoints.length > 2) {
+            completedLassoPoints = [...lassoPoints];
+        }
         isLassoActive = false;
         lassoPoints = [];
         draw();
@@ -1100,12 +1258,14 @@ canvas.addEventListener('mouseup', (e) => {
     
     isDragging = false;
     isPanning = false;
-    canvas.style.cursor = currentTool === 'text' ? 'text' : (currentTool === 'lasso' ? 'crosshair' : 'default');
+    dragStartLassoPoints = null; // Reset lasso points reference
+    canvas.style.cursor = currentTool === 'lasso' ? 'crosshair' : 'default';
 });
 
 canvas.addEventListener('mouseleave', () => {
     isDragging = false;
     isPanning = false;
+    dragStartLassoPoints = null; // Reset lasso points reference
     if (isLassoActive) {
         isLassoActive = false;
         lassoPoints = [];
@@ -1129,21 +1289,55 @@ function isPointInPolygon(x, y, points) {
 function startEditingText(textObj) {
     editingText = textObj;
     const rect = canvas.getBoundingClientRect();
-    textEditor.value = textObj.text;
+    textEditor.value = textObj.text || '';
     textEditor.style.display = 'block';
-    textEditor.style.left = (rect.left + textObj.x + canvasOffset.x) + 'px';
-    textEditor.style.top = (rect.top + textObj.y + canvasOffset.y) + 'px';
-    textEditor.style.width = '200px';
+    
+    // Position editor based on object type
+    if (textObj instanceof TextObject) {
+        textEditor.style.left = (rect.left + textObj.x + canvasOffset.x) + 'px';
+        textEditor.style.top = (rect.top + textObj.y + canvasOffset.y) + 'px';
+        textEditor.style.width = '200px';
+        textEditor.style.height = 'auto';
+        textEditor.style.textAlign = 'left';
+        textEditor.style.fontSize = '20px';
+    } else if (textObj instanceof Box) {
+        textEditor.style.left = (rect.left + textObj.x + canvasOffset.x) + 'px';
+        textEditor.style.top = (rect.top + textObj.y + canvasOffset.y) + 'px';
+        textEditor.style.width = textObj.width + 'px';
+        textEditor.style.height = textObj.height + 'px';
+        textEditor.style.textAlign = 'center';
+        textEditor.style.fontSize = '16px';
+        textEditor.style.lineHeight = textObj.height + 'px';
+    } else if (textObj instanceof Circle) {
+        textEditor.style.left = (rect.left + textObj.x + canvasOffset.x) + 'px';
+        textEditor.style.top = (rect.top + textObj.y + canvasOffset.y) + 'px';
+        textEditor.style.width = (textObj.radius * 2) + 'px';
+        textEditor.style.height = (textObj.radius * 2) + 'px';
+        textEditor.style.textAlign = 'center';
+        textEditor.style.fontSize = '16px';
+        textEditor.style.lineHeight = (textObj.radius * 2) + 'px';
+    }
+    
     textEditor.focus();
     textEditor.select();
 }
 
 function hideTextEditor() {
     if (editingText) {
-        editingText.text = textEditor.value.trim() || 'Text';
+        const trimmedText = textEditor.value.trim();
+        if (editingText instanceof TextObject) {
+            editingText.text = trimmedText || 'Text';
+        } else {
+            // For Box and Circle, empty string is fine
+            editingText.text = trimmedText;
+        }
         editingText = null;
     }
     textEditor.style.display = 'none';
+    textEditor.style.textAlign = 'left'; // Reset alignment
+    textEditor.style.height = 'auto'; // Reset height
+    textEditor.style.lineHeight = 'normal'; // Reset line height
+    textEditor.style.fontSize = '20px'; // Reset font size
     draw();
 }
 
@@ -1276,6 +1470,34 @@ canvas.addEventListener('dblclick', (e) => {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
+    // Check boxes first
+    for (let i = boxes.length - 1; i >= 0; i--) {
+        if (boxes[i].contains(x, y)) {
+            // Don't edit if clicking on an edge
+            if (!boxes[i].getEdgeAt(x, y)) {
+                selectedShapes.clear();
+                selectedShapes.add(boxes[i]);
+                startEditingText(boxes[i]);
+                draw();
+                return;
+            }
+        }
+    }
+    
+    // Check circles
+    for (let i = circles.length - 1; i >= 0; i--) {
+        if (circles[i].contains(x, y)) {
+            // Don't edit if clicking on an edge
+            if (!circles[i].getEdgeAt(x, y)) {
+                selectedShapes.clear();
+                selectedShapes.add(circles[i]);
+                startEditingText(circles[i]);
+                draw();
+                return;
+            }
+        }
+    }
+    
     // Find text object at click position
     for (let i = textObjects.length - 1; i >= 0; i--) {
         if (textObjects[i].contains(x, y)) {
@@ -1355,5 +1577,16 @@ function showArrowDirectionPanelForConnection(connection) {
     });
 }
 
+// Animation loop for blinking lasso
+function animateLasso() {
+    if (completedLassoPoints && currentTool === 'lasso') {
+        lassoBlinkAnimation += 0.05; // Slower, gentler blinking
+        draw();
+    }
+    requestAnimationFrame(animateLasso);
+}
+
 // Initial draw
 draw();
+// Start animation loop
+animateLasso();

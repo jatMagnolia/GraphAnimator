@@ -169,6 +169,40 @@ h1 {
     opacity: 0.5;
 }
 
+.text-shape {
+    width: 80px;
+    height: 80px;
+    background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+    user-select: none;
+}
+
+.text-shape:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+}
+
+.text-shape:active {
+    cursor: grabbing;
+    transform: scale(0.95);
+}
+
+.text-shape span {
+    color: white;
+    font-weight: 600;
+    font-size: 16px;
+}
+
+.text-shape.dragging {
+    opacity: 0.5;
+}
+
 #colorPicker {
     width: 80px;
     height: 80px;
