@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drawing Program</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Drawing Program</h1>
+        
+        <!-- Toolbar with tools -->
+        <div class="toolbar">
+            <div class="tool-section">
+                <h3>Tools</h3>
+                <div class="tool-buttons">
+                    <button class="tool-btn active" id="selectTool" title="Select Tool">
+                        <span>🔲</span> Select
+                    </button>
+                    <button class="tool-btn" id="lassoTool" title="Lasso Tool">
+                        <span>🪃</span> Lasso
+                    </button>
+                    <button class="tool-btn" id="textTool" title="Text Tool">
+                        <span>📝</span> Text
+                    </button>
+                </div>
+            </div>
+            
+            <div class="tool-section">
+                <h3>Shapes</h3>
+                <div class="shape-tools">
+                    <div class="box" id="draggableBox" draggable="true" title="Drag to canvas">
+                        <span>Box</span>
+                    </div>
+                    <div class="circle" id="draggableCircle" draggable="true" title="Drag to canvas">
+                        <span>Circle</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="tool-section">
+                <h3>Color</h3>
+                <input type="color" id="colorPicker" value="#667eea" title="Change color">
+            </div>
+        </div>
+        
+        <div id="arrowDirectionPanel" class="arrow-direction-panel" style="display: none;">
+            <p>Choose arrow direction:</p>
+            <div class="arrow-options">
+                <button class="arrow-option" data-direction="forward">→</button>
+                <button class="arrow-option" data-direction="backward">←</button>
+                <button class="arrow-option" data-direction="both">↔</button>
+                <button class="arrow-option" data-direction="none">—</button>
+            </div>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+            <input type="text" id="textEditor" class="text-editor" style="display: none;">
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
