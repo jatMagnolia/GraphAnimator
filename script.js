@@ -95,23 +95,23 @@ class Box extends DrawableObject {
         
         // Draw text if it exists
         if (this.text) {
-            ctx.fillStyle = 'white';
-            ctx.font = '16px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            
-            // Handle text overflow - truncate if too long
-            const maxWidth = this.width - 10;
-            let displayText = this.text;
-            const metrics = ctx.measureText(displayText);
-            if (metrics.width > maxWidth) {
-                // Truncate text with ellipsis
-                while (ctx.measureText(displayText + '...').width > maxWidth && displayText.length > 0) {
-                    displayText = displayText.slice(0, -1);
-                }
-                displayText = displayText + '...';
+        ctx.fillStyle = 'white';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Handle text overflow - truncate if too long
+        const maxWidth = this.width - 10;
+        let displayText = this.text;
+        const metrics = ctx.measureText(displayText);
+        if (metrics.width > maxWidth) {
+            // Truncate text with ellipsis
+            while (ctx.measureText(displayText + '...').width > maxWidth && displayText.length > 0) {
+                displayText = displayText.slice(0, -1);
             }
-            
+            displayText = displayText + '...';
+        }
+        
             ctx.fillText(displayText, this.x + canvasOffset.x + this.width / 2, this.y + canvasOffset.y + this.height / 2);
         }
     }
@@ -126,7 +126,7 @@ class Box extends DrawableObject {
     getBounds() {
         return { x: this.x, y: this.y, width: this.width, height: this.height };
     }
-    
+
     // Get the edge point based on edge name ('top', 'bottom', 'left', 'right')
     getEdgePoint(edge) {
         switch(edge) {
@@ -142,7 +142,7 @@ class Box extends DrawableObject {
                 return { x: this.x + this.width / 2, y: this.y + this.height / 2 };
         }
     }
-    
+
     // Detect which edge was clicked (with some tolerance)
     getEdgeAt(x, y, tolerance = 10) {
         const worldX = x - canvasOffset.x;
@@ -227,23 +227,23 @@ class Circle extends DrawableObject {
         
         // Draw text if it exists
         if (this.text) {
-            ctx.fillStyle = 'white';
-            ctx.font = '16px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            
-            // Handle text overflow - truncate if too long
-            const maxWidth = this.radius * 1.8;
-            let displayText = this.text;
-            const metrics = ctx.measureText(displayText);
-            if (metrics.width > maxWidth) {
-                // Truncate text with ellipsis
-                while (ctx.measureText(displayText + '...').width > maxWidth && displayText.length > 0) {
-                    displayText = displayText.slice(0, -1);
-                }
-                displayText = displayText + '...';
+        ctx.fillStyle = 'white';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Handle text overflow - truncate if too long
+        const maxWidth = this.radius * 1.8;
+        let displayText = this.text;
+        const metrics = ctx.measureText(displayText);
+        if (metrics.width > maxWidth) {
+            // Truncate text with ellipsis
+            while (ctx.measureText(displayText + '...').width > maxWidth && displayText.length > 0) {
+                displayText = displayText.slice(0, -1);
             }
-            
+            displayText = displayText + '...';
+        }
+        
             ctx.fillText(displayText, this.x + canvasOffset.x + this.radius, this.y + canvasOffset.y + this.radius);
         }
     }
@@ -261,7 +261,7 @@ class Circle extends DrawableObject {
     getBounds() {
         return { x: this.x, y: this.y, width: this.radius * 2, height: this.radius * 2 };
     }
-    
+
     // Get the edge point based on edge name ('top', 'bottom', 'left', 'right')
     getEdgePoint(edge) {
         const centerX = this.x + this.radius;
@@ -279,7 +279,7 @@ class Circle extends DrawableObject {
                 return { x: centerX, y: centerY };
         }
     }
-    
+
     // Detect which edge was clicked (with some tolerance)
     getEdgeAt(x, y, tolerance = 10) {
         const worldX = x - canvasOffset.x;
@@ -503,32 +503,45 @@ class Connection {
 }
 
 // Draw grid background (1 inch = 96 pixels at 96 DPI)
+// Grid is in world space, moves with canvas panning
 function drawGrid() {
     const gridSize = 96; // 1 inch in pixels
     ctx.strokeStyle = '#e0e0e0';
     ctx.lineWidth = 1;
     
-    // Calculate the visible area considering canvas offset
-    const startX = Math.floor(-canvasOffset.x / gridSize) * gridSize - canvasOffset.x;
-    const startY = Math.floor(-canvasOffset.y / gridSize) * gridSize - canvasOffset.y;
-    const endX = canvas.width - canvasOffset.x;
-    const endY = canvas.height - canvasOffset.y;
+    // Calculate visible area in world coordinates
+    const worldStartX = -canvasOffset.x;
+    const worldStartY = -canvasOffset.y;
+    const worldEndX = worldStartX + canvas.width;
+    const worldEndY = worldStartY + canvas.height;
+    
+    // Calculate grid line positions
+    const startX = Math.floor(worldStartX / gridSize) * gridSize;
+    const startY = Math.floor(worldStartY / gridSize) * gridSize;
     
     // Draw vertical lines
-    for (let x = startX; x <= endX; x += gridSize) {
+    for (let x = startX; x <= worldEndX; x += gridSize) {
+        const screenX = x + canvasOffset.x;
         ctx.beginPath();
-        ctx.moveTo(x + canvasOffset.x, 0);
-        ctx.lineTo(x + canvasOffset.x, canvas.height);
+        ctx.moveTo(screenX, 0);
+        ctx.lineTo(screenX, canvas.height);
         ctx.stroke();
     }
     
     // Draw horizontal lines
-    for (let y = startY; y <= endY; y += gridSize) {
+    for (let y = startY; y <= worldEndY; y += gridSize) {
+        const screenY = y + canvasOffset.y;
         ctx.beginPath();
-        ctx.moveTo(0, y + canvasOffset.y);
-        ctx.lineTo(canvas.width, y + canvasOffset.y);
+        ctx.moveTo(0, screenY);
+        ctx.lineTo(canvas.width, screenY);
         ctx.stroke();
     }
+}
+
+// Snap a coordinate to the grid
+function snapToGrid(value) {
+    const gridSize = 96; // 1 inch in pixels
+    return Math.round(value / gridSize) * gridSize;
 }
 
 // Draw all objects
@@ -553,9 +566,9 @@ function draw(mouseX = null, mouseY = null) {
                     highlightEdge = hoveredEdge;
                 }
             } else if (box.contains(mouseX, mouseY)) {
-                const hoveredEdge = box.getEdgeAt(mouseX, mouseY);
-                if (hoveredEdge) {
-                    highlightEdge = hoveredEdge;
+            const hoveredEdge = box.getEdgeAt(mouseX, mouseY);
+            if (hoveredEdge) {
+                highlightEdge = hoveredEdge;
                 }
             }
         }
@@ -586,9 +599,9 @@ function draw(mouseX = null, mouseY = null) {
                     highlightEdge = hoveredEdge;
                 }
             } else if (circle.contains(mouseX, mouseY)) {
-                const hoveredEdge = circle.getEdgeAt(mouseX, mouseY);
-                if (hoveredEdge) {
-                    highlightEdge = hoveredEdge;
+            const hoveredEdge = circle.getEdgeAt(mouseX, mouseY);
+            if (hoveredEdge) {
+                highlightEdge = hoveredEdge;
                 }
             }
         }
@@ -794,11 +807,17 @@ canvasContainer.addEventListener('drop', (e) => {
     const y = e.clientY - rect.top - canvasOffset.y - 40;
     
     if (shapeType === 'circle') {
-        circles.push(new Circle(x, y));
+        const snappedX = snapToGrid(x);
+        const snappedY = snapToGrid(y);
+        circles.push(new Circle(snappedX, snappedY));
     } else if (shapeType === 'box') {
-        boxes.push(new Box(x, y));
+        const snappedX = snapToGrid(x);
+        const snappedY = snapToGrid(y);
+        boxes.push(new Box(snappedX, snappedY));
     } else if (shapeType === 'text') {
-        const textObj = new TextObject(x, y);
+        const snappedX = snapToGrid(x);
+        const snappedY = snapToGrid(y);
+        const textObj = new TextObject(snappedX, snappedY);
         textObjects.push(textObj);
         selectedShapes.clear();
         selectedShapes.add(textObj);
@@ -851,10 +870,10 @@ canvas.addEventListener('mousedown', (e) => {
     
     // Select tool or pan
     if (e.button === 0) { // Left click
-        // First check if clicking on a connection
-        const clickedConnection = connections.find(conn => conn.isPointNear(x, y));
+    // First check if clicking on a connection
+    const clickedConnection = connections.find(conn => conn.isPointNear(x, y));
         if (clickedConnection && currentTool === 'select') {
-            // Clicked on a connection - allow editing
+        // Clicked on a connection - allow editing
             if (e.shiftKey || e.ctrlKey || e.metaKey) {
                 // Multi-select
                 if (selectedConnections.has(clickedConnection)) {
@@ -865,26 +884,26 @@ canvas.addEventListener('mousedown', (e) => {
                 selectedConnection = null; // Clear single selection when multi-selecting
             } else {
                 // Single select
-                selectedConnection = clickedConnection;
+        selectedConnection = clickedConnection;
                 selectedConnections.clear();
-                // Clear shape selection when selecting a connection
+        // Clear shape selection when selecting a connection
                 selectedShapes.clear();
-                showArrowDirectionPanelForConnection(clickedConnection);
+        showArrowDirectionPanelForConnection(clickedConnection);
             }
             draw(x, y);
-            return;
-        }
-        
+        return;
+    }
+    
         // Check if clicking on an edge (only for boxes and circles, only with select tool)
-        let clickedShape = null;
-        let clickedEdge = null;
+    let clickedShape = null;
+    let clickedEdge = null;
         
         if (currentTool === 'select') {
             // Use better edge detection during connection creation (when first anchor is set)
             const useConnectionMode = pendingEdgeSelection !== null;
-            
-            // Check boxes first
-            for (const box of boxes) {
+    
+    // Check boxes first
+    for (const box of boxes) {
                 if (useConnectionMode) {
                     // During connection creation, use larger detection zones
                     clickedEdge = box.getBestEdgeForConnection(x, y);
@@ -894,19 +913,19 @@ canvas.addEventListener('mousedown', (e) => {
                     }
                 } else {
                     // Normal mode - check if clicking on edge
-                    if (box.contains(x, y)) {
-                        clickedEdge = box.getEdgeAt(x, y);
-                        if (clickedEdge) {
-                            clickedShape = box;
-                            break;
+        if (box.contains(x, y)) {
+            clickedEdge = box.getEdgeAt(x, y);
+            if (clickedEdge) {
+                clickedShape = box;
+                break;
                         }
-                    }
-                }
             }
-            
-            // Check circles if no box edge found
-            if (!clickedShape) {
-                for (const circle of circles) {
+        }
+    }
+    
+    // Check circles if no box edge found
+    if (!clickedShape) {
+        for (const circle of circles) {
                     if (useConnectionMode) {
                         // During connection creation, use larger detection zones
                         clickedEdge = circle.getBestEdgeForConnection(x, y);
@@ -916,42 +935,42 @@ canvas.addEventListener('mousedown', (e) => {
                         }
                     } else {
                         // Normal mode - check if clicking on edge
-                        if (circle.contains(x, y)) {
-                            clickedEdge = circle.getEdgeAt(x, y);
-                            if (clickedEdge) {
-                                clickedShape = circle;
-                                break;
+            if (circle.contains(x, y)) {
+                clickedEdge = circle.getEdgeAt(x, y);
+                if (clickedEdge) {
+                    clickedShape = circle;
+                    break;
                             }
                         }
-                    }
                 }
             }
         }
-        
-        if (clickedShape && clickedEdge) {
-            // Edge clicked - clear shape selection when clicking on edge
+    }
+    
+    if (clickedShape && clickedEdge) {
+        // Edge clicked - clear shape selection when clicking on edge
             selectedShapes.clear();
             selectedConnection = null;
-            if (!pendingEdgeSelection) {
-                // First edge selected
-                pendingEdgeSelection = { shape: clickedShape, edge: clickedEdge };
-                tempConnectionEnd = { x, y };
+        if (!pendingEdgeSelection) {
+            // First edge selected
+            pendingEdgeSelection = { shape: clickedShape, edge: clickedEdge };
+            tempConnectionEnd = { x, y };
+        } else {
+            // Second edge selected
+            if (clickedShape !== pendingEdgeSelection.shape || clickedEdge !== pendingEdgeSelection.edge) {
+                // Different shape or different edge - show arrow direction panel
+                waitingForArrowSelection = true;
+                tempConnectionEnd = clickedShape.getEdgePoint(clickedEdge);
+                showArrowDirectionPanel(pendingEdgeSelection, clickedShape, clickedEdge);
             } else {
-                // Second edge selected
-                if (clickedShape !== pendingEdgeSelection.shape || clickedEdge !== pendingEdgeSelection.edge) {
-                    // Different shape or different edge - show arrow direction panel
-                    waitingForArrowSelection = true;
-                    tempConnectionEnd = clickedShape.getEdgePoint(clickedEdge);
-                    showArrowDirectionPanel(pendingEdgeSelection, clickedShape, clickedEdge);
-                } else {
-                    // Same shape and same edge - allow creating another connection from this edge
-                    tempConnectionEnd = { x, y };
-                }
+                // Same shape and same edge - allow creating another connection from this edge
+                tempConnectionEnd = { x, y };
             }
-            draw(x, y);
-            return;
         }
-        
+            draw(x, y);
+        return;
+    }
+    
         // Check if clicking on an object (not edge)
         let clickedObject = null;
         
@@ -959,9 +978,9 @@ canvas.addEventListener('mousedown', (e) => {
         for (let i = textObjects.length - 1; i >= 0; i--) {
             if (textObjects[i].contains(x, y)) {
                 clickedObject = textObjects[i];
-                break;
-            }
+            break;
         }
+    }
         if (!clickedObject) {
             for (let i = circles.length - 1; i >= 0; i--) {
                 if (circles[i].contains(x, y)) {
@@ -974,21 +993,21 @@ canvas.addEventListener('mousedown', (e) => {
             for (let i = boxes.length - 1; i >= 0; i--) {
                 if (boxes[i].contains(x, y)) {
                     clickedObject = boxes[i];
-                    break;
-                }
+                break;
             }
         }
-        
+    }
+    
         if (clickedObject) {
-            // Cancel edge selection if clicking on shape center
-            pendingEdgeSelection = null;
-            tempConnectionEnd = null;
+        // Cancel edge selection if clicking on shape center
+        pendingEdgeSelection = null;
+        tempConnectionEnd = null;
             waitingForArrowSelection = false;
             if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
-                selectedConnection = null;
+        selectedConnection = null;
                 selectedConnections.clear();
             }
-            arrowDirectionPanel.style.display = 'none';
+        arrowDirectionPanel.style.display = 'none';
             // Handle selection
             if (e.shiftKey || e.ctrlKey || e.metaKey) {
                 // Multi-select
@@ -1003,7 +1022,7 @@ canvas.addEventListener('mousedown', (e) => {
                 selectedShapes.add(clickedObject);
             }
             
-            isDragging = true;
+        isDragging = true;
             dragStartPos.x = x;
             dragStartPos.y = y;
             // Store initial positions of all selected shapes
@@ -1021,18 +1040,18 @@ canvas.addEventListener('mousedown', (e) => {
                 dragOffset.y -= clickedObject.radius;
             }
             
-            canvas.style.cursor = 'grabbing';
-        } else {
-            // Clicked outside, hide editor if visible and cancel edge selection
+        canvas.style.cursor = 'grabbing';
+    } else {
+        // Clicked outside, hide editor if visible and cancel edge selection
             hideTextEditor();
-            pendingEdgeSelection = null;
-            tempConnectionEnd = null;
-            waitingForArrowSelection = false;
+        pendingEdgeSelection = null;
+        tempConnectionEnd = null;
+        waitingForArrowSelection = false;
             if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
-                selectedConnection = null;
+        selectedConnection = null;
                 selectedConnections.clear();
             }
-            arrowDirectionPanel.style.display = 'none';
+        arrowDirectionPanel.style.display = 'none';
             
             // Start panning
             if (currentTool === 'select') {
@@ -1072,11 +1091,11 @@ canvas.addEventListener('mousemove', (e) => {
     
     // Check if hovering over connection
     if (currentTool === 'select') {
-        const hoveringConnection = connections.find(conn => conn.isPointNear(x, y));
-        if (hoveringConnection) {
-            canvas.style.cursor = 'pointer';
-            draw(x, y);
-            return;
+    const hoveringConnection = connections.find(conn => conn.isPointNear(x, y));
+    if (hoveringConnection) {
+        canvas.style.cursor = 'pointer';
+        draw(x, y);
+        return;
         }
     }
     
@@ -1096,8 +1115,16 @@ canvas.addEventListener('mousemove', (e) => {
         // Move all selected shapes based on their initial positions
         dragStartShapes.forEach(({ shape, x: startX, y: startY }) => {
             if (selectedShapes.has(shape)) {
-                shape.x = startX + deltaX;
-                shape.y = startY + deltaY;
+                // Calculate new position
+                let newX = startX + deltaX;
+                let newY = startY + deltaY;
+                
+                // Snap to grid
+                newX = snapToGrid(newX);
+                newY = snapToGrid(newY);
+                
+                shape.x = newX;
+                shape.y = newY;
                 
                 // Keep within reasonable bounds (optional)
                 if (shape instanceof Circle) {
@@ -1147,9 +1174,9 @@ canvas.addEventListener('mousemove', (e) => {
                     break;
                 }
             } else {
-                if (box.contains(x, y) && box.getEdgeAt(x, y)) {
-                    hoveringEdge = true;
-                    break;
+            if (box.contains(x, y) && box.getEdgeAt(x, y)) {
+                hoveringEdge = true;
+                break;
                 }
             }
         }
@@ -1162,12 +1189,12 @@ canvas.addEventListener('mousemove', (e) => {
                         break;
                     }
                 } else {
-                    if (circle.contains(x, y) && circle.getEdgeAt(x, y)) {
-                        hoveringEdge = true;
-                        break;
-                    }
+                if (circle.contains(x, y) && circle.getEdgeAt(x, y)) {
+                    hoveringEdge = true;
+                    break;
                 }
             }
+        }
         }
         
         // Check if hovering over object
@@ -1196,9 +1223,9 @@ canvas.addEventListener('mousemove', (e) => {
         }
         canvas.style.cursor = hoveringEdge ? 'crosshair' : (hovering ? 'grab' : 'default');
     }
-    
-    // Pass mouse coordinates to draw so edges can be highlighted
-    draw(x, y);
+        
+        // Pass mouse coordinates to draw so edges can be highlighted
+        draw(x, y);
 });
 
 canvas.addEventListener('mouseup', (e) => {
@@ -1253,7 +1280,7 @@ canvas.addEventListener('mouseup', (e) => {
         }
         isLassoActive = false;
         lassoPoints = [];
-        draw();
+    draw();
     }
     
     isDragging = false;
@@ -1492,7 +1519,7 @@ canvas.addEventListener('dblclick', (e) => {
                 selectedShapes.clear();
                 selectedShapes.add(circles[i]);
                 startEditingText(circles[i]);
-                draw();
+    draw();
                 return;
             }
         }
@@ -1504,7 +1531,7 @@ canvas.addEventListener('dblclick', (e) => {
             selectedShapes.clear();
             selectedShapes.add(textObjects[i]);
             startEditingText(textObjects[i]);
-            draw();
+        draw();
             return;
         }
     }

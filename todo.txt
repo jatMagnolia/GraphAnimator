@@ -1,0 +1,12 @@
+Drawing:
+- shift to always on (place multiple)
+- select has size change box - (circles allowed to be ellipse, box into rectangle)
+- grid background by default on canvas
+
+Animator:
+- side scrolling "view" below canvas
+- camera icon to take "snapshot" (save the current graph structure in viewfinder)
+- be able to smoothly animate between "snapshots" (move first, then make new objects)
+
+Extra:
+- downloadable
