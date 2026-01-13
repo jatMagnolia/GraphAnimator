@@ -99,8 +99,9 @@ class Box extends DrawableObject {
         
         // Draw text if it exists
         if (this.text) {
-        ctx.fillStyle = 'white';
-        ctx.font = '16px sans-serif';
+        // Dynamically determine text color based on background color contrast
+        ctx.fillStyle = getContrastColor(this.color);
+        ctx.font = 'bold 24px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         
@@ -231,8 +232,9 @@ class Circle extends DrawableObject {
         
         // Draw text if it exists
         if (this.text) {
-        ctx.fillStyle = 'white';
-        ctx.font = '16px sans-serif';
+        // Dynamically determine text color based on background color contrast
+        ctx.fillStyle = getContrastColor(this.color);
+        ctx.font = 'bold 24px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         
@@ -546,6 +548,70 @@ function drawGrid() {
 function snapToGrid(value) {
     const gridSize = 96; // 1 inch in pixels
     return Math.round(value / gridSize) * gridSize;
+}
+
+// Calculate relative luminance of a color (based on WCAG formula)
+// Returns a value between 0 (black) and 1 (white)
+function getRelativeLuminance(r, g, b) {
+    // Convert RGB values to relative luminance
+    const [rs, gs, bs] = [r, g, b].map(val => {
+        val = val / 255;
+        return val <= 0.03928 ? val / 12.92 : Math.pow((val + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+}
+
+// Convert hex color to RGB
+function hexToRgb(hex) {
+    // Remove # if present
+    hex = hex.replace('#', '');
+    
+    // Handle 3-digit hex codes
+    if (hex.length === 3) {
+        hex = hex.split('').map(char => char + char).join('');
+    }
+    
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    
+    return { r, g, b };
+}
+
+// Get contrast color (black or white) based on background color
+// Similar to CSS contrast-color() function
+function getContrastColor(backgroundColor) {
+    // Parse the color - handle hex, rgb(), rgba(), and named colors
+    let rgb;
+    
+    if (backgroundColor.startsWith('#')) {
+        rgb = hexToRgb(backgroundColor);
+    } else if (backgroundColor.startsWith('rgb')) {
+        // Parse rgb() or rgba() format
+        const matches = backgroundColor.match(/\d+/g);
+        if (matches && matches.length >= 3) {
+            rgb = { r: parseInt(matches[0]), g: parseInt(matches[1]), b: parseInt(matches[2]) };
+        } else {
+            // Fallback to black if parsing fails
+            return '#000000';
+        }
+    } else {
+        // Try to parse as hex (might not have #)
+        try {
+            rgb = hexToRgb(backgroundColor);
+        } catch {
+            // Fallback: assume it's a named color and use black
+            // For simplicity, we'll return white as a safe default
+            return '#FFFFFF';
+        }
+    }
+    
+    // Calculate relative luminance
+    const luminance = getRelativeLuminance(rgb.r, rgb.g, rgb.b);
+    
+    // If luminance is greater than 0.5 (midpoint), use black text, otherwise use white
+    // This threshold can be adjusted based on preference (WCAG uses 0.5 as a common threshold)
+    return luminance > 0.5 ? '#000000' : '#FFFFFF';
 }
 
 // Draw all objects
