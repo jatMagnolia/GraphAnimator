@@ -34,6 +34,7 @@ let resizeHandle = null; // Which handle is being dragged: 'nw', 'n', 'ne', 'e',
 let resizeStartPos = { x: 0, y: 0 }; // Initial mouse position when resize starts
 let resizeStartShape = null; // The shape being resized
 let resizeStartBounds = { x: 0, y: 0, width: 0, height: 0 }; // Initial bounds when resize starts
+let resizeStartBoxStates = []; // Store original states of all boxes in a group when resizing
 let isPanning = false;
 let panStart = { x: 0, y: 0 };
 let panOffset = { x: 0, y: 0 };
@@ -57,6 +58,14 @@ let pendingEdgeSelection = null; // { shape, edge } for first edge selection
 let tempConnectionEnd = null; // { x, y } for preview
 let waitingForArrowSelection = false; // True when both edges selected, waiting for arrow choice
 let selectedConnection = null; // Connection being edited
+
+// Box split preview state
+let splitPreviewBox = null; // Box being hovered over for split preview
+let splitPreviewDirection = null; // 'horizontal' or 'vertical'
+let draggedShapeType = null; // Track what shape is being dragged
+
+// Box groups for split boxes that move together
+let boxGroups = new Map(); // Map<Box, Set<Box>> - groups of boxes that move together
 
 // Store objects on canvas
 let boxes = [];
@@ -92,6 +101,49 @@ class Box extends DrawableObject {
         this.height = 80;
         this.color = currentColor;
         this.text = '';
+        this.groupId = null; // ID for boxes that move together (from splits)
+    }
+    
+    // Get all boxes in the same group (for split boxes)
+    getGroup() {
+        if (!this.groupId) return new Set([this]);
+        const group = new Set();
+        boxes.forEach(box => {
+            if (box.groupId === this.groupId) {
+                group.add(box);
+            }
+        });
+        return group;
+    }
+    
+    // Get the bounding box of the entire group
+    getGroupBounds() {
+        const group = this.getGroup();
+        if (group.size === 1) {
+            return this.getBounds();
+        }
+        
+        let minX = Infinity, minY = Infinity;
+        let maxX = -Infinity, maxY = -Infinity;
+        
+        group.forEach(box => {
+            minX = Math.min(minX, box.x);
+            minY = Math.min(minY, box.y);
+            maxX = Math.max(maxX, box.x + box.width);
+            maxY = Math.max(maxY, box.y + box.height);
+        });
+        
+        return {
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
+        };
+    }
+    
+    // Check if this box is part of a group that should be resized together
+    isGroupResize() {
+        return this.groupId && this.getGroup().size > 1;
     }
 
     draw(isSelected = false) {
@@ -494,7 +546,7 @@ class TextObject extends DrawableObject {
         return { x: this.x, y: this.y, width: metrics.width, height: this.fontSize };
     }
     
-    // Get resize handle positions (8 handles: corners and midpoints)
+    // Get resize handle positions (4 handles: corners only, no side or top/bottom handles)
     getResizeHandles() {
         ctx.font = `${this.fontSize}px sans-serif`;
         const metrics = ctx.measureText(this.text);
@@ -504,13 +556,10 @@ class TextObject extends DrawableObject {
         const h = this.fontSize;
         return {
             'nw': { x: screenX, y: screenY },
-            'n': { x: screenX + w / 2, y: screenY },
             'ne': { x: screenX + w, y: screenY },
-            'e': { x: screenX + w, y: screenY + h / 2 },
             'se': { x: screenX + w, y: screenY + h },
-            's': { x: screenX + w / 2, y: screenY + h },
-            'sw': { x: screenX, y: screenY + h },
-            'w': { x: screenX, y: screenY + h / 2 }
+            'sw': { x: screenX, y: screenY + h }
+            // Note: Only corner handles for text objects
         };
     }
     
@@ -761,18 +810,28 @@ function drawResizeHandles(shape) {
     ctx.strokeRect(screenX, screenY, boxWidth, boxHeight);
     ctx.setLineDash([]);
     
-    // Draw resize handles at the corners and midpoints of the padded outline box
-    // Store handles in shape for detection (we'll update getResizeHandleAt to use padded positions)
-    const handles = {
-        'nw': { x: screenX, y: screenY },
-        'n': { x: screenX + boxWidth / 2, y: screenY },
-        'ne': { x: screenX + boxWidth, y: screenY },
-        'e': { x: screenX + boxWidth, y: screenY + boxHeight / 2 },
-        'se': { x: screenX + boxWidth, y: screenY + boxHeight },
-        's': { x: screenX + boxWidth / 2, y: screenY + boxHeight },
-        'sw': { x: screenX, y: screenY + boxHeight },
-        'w': { x: screenX, y: screenY + boxHeight / 2 }
-    };
+    // For text objects, only draw corner handles; for others, draw all 8 handles
+    let handles;
+    if (shape instanceof TextObject) {
+        handles = {
+            'nw': { x: screenX, y: screenY },
+            'ne': { x: screenX + boxWidth, y: screenY },
+            'se': { x: screenX + boxWidth, y: screenY + boxHeight },
+            'sw': { x: screenX, y: screenY + boxHeight }
+        };
+    } else {
+        // Draw resize handles at the corners and midpoints of the padded outline box
+        handles = {
+            'nw': { x: screenX, y: screenY },
+            'n': { x: screenX + boxWidth / 2, y: screenY },
+            'ne': { x: screenX + boxWidth, y: screenY },
+            'e': { x: screenX + boxWidth, y: screenY + boxHeight / 2 },
+            'se': { x: screenX + boxWidth, y: screenY + boxHeight },
+            's': { x: screenX + boxWidth / 2, y: screenY + boxHeight },
+            'sw': { x: screenX, y: screenY + boxHeight },
+            'w': { x: screenX, y: screenY + boxHeight / 2 }
+        };
+    }
     
     // Store padded handles on shape temporarily for detection
     shape._paddedResizeHandles = handles;
@@ -832,7 +891,17 @@ function draw(mouseX = null, mouseY = null) {
         }
         // Draw resize handles if selected
         if (selectedShapes.has(box) && selectedShapes.size === 1) {
-            drawResizeHandles(box);
+            // If this box is in a group, draw handles around the entire group
+            if (box.isGroupResize()) {
+                const groupBounds = box.getGroupBounds();
+                // Create a temporary box-like object for drawing handles
+                const groupBox = {
+                    getBounds: () => groupBounds
+                };
+                drawResizeHandles(groupBox);
+            } else {
+                drawResizeHandles(box);
+            }
         }
     });
     
@@ -894,6 +963,40 @@ function draw(mouseX = null, mouseY = null) {
         ctx.moveTo(fromScreenX, fromScreenY);
         ctx.lineTo(tempConnectionEnd.x, tempConnectionEnd.y);
         ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    
+    // Draw box split preview
+    if (splitPreviewBox && splitPreviewDirection) {
+        const box = splitPreviewBox;
+        const screenX = box.x + canvasOffset.x;
+        const screenY = box.y + canvasOffset.y;
+        
+        // Draw grey overlay on the box
+        ctx.fillStyle = 'rgba(128, 128, 128, 0.3)'; // Semi-transparent grey
+        ctx.fillRect(screenX, screenY, box.width, box.height);
+        
+        // Draw split line
+        ctx.strokeStyle = 'rgba(128, 128, 128, 0.8)'; // Darker grey for the line
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 4]);
+        
+        if (splitPreviewDirection === 'horizontal') {
+            // Draw horizontal split line (widthwise)
+            const splitY = screenY + box.height / 2;
+            ctx.beginPath();
+            ctx.moveTo(screenX, splitY);
+            ctx.lineTo(screenX + box.width, splitY);
+            ctx.stroke();
+        } else {
+            // Draw vertical split line (lengthwise)
+            const splitX = screenX + box.width / 2;
+            ctx.beginPath();
+            ctx.moveTo(splitX, screenY);
+            ctx.lineTo(splitX, screenY + box.height);
+            ctx.stroke();
+        }
+        
         ctx.setLineDash([]);
     }
     
@@ -1018,11 +1121,16 @@ colorPicker.addEventListener('change', (e) => {
 draggableBox.addEventListener('dragstart', (e) => {
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('shapeType', 'box');
+    draggedShapeType = 'box';
     draggableBox.classList.add('dragging');
 });
 
 draggableBox.addEventListener('dragend', () => {
     draggableBox.classList.remove('dragging');
+    draggedShapeType = null;
+    splitPreviewBox = null;
+    splitPreviewDirection = null;
+    draw();
 });
 
 draggableCircle.addEventListener('dragstart', (e) => {
@@ -1074,27 +1182,160 @@ canvasContainer.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     canvasContainer.classList.add('drag-over');
+    
+    // Check if dragging a box over an existing box for split preview
+    if (draggedShapeType === 'box') {
+        const rect = canvas.getBoundingClientRect();
+        const dropX = e.clientX - rect.left;
+        const dropY = e.clientY - rect.top;
+        
+        // Find box being hovered over
+        let hoveredBox = null;
+        for (const box of boxes) {
+            if (box.contains(dropX, dropY)) {
+                hoveredBox = box;
+                break;
+            }
+        }
+        
+        if (hoveredBox) {
+            splitPreviewBox = hoveredBox;
+            // Determine split direction based on mouse position
+            const worldX = dropX - canvasOffset.x;
+            const worldY = dropY - canvasOffset.y;
+            const centerX = hoveredBox.x + hoveredBox.width / 2;
+            const centerY = hoveredBox.y + hoveredBox.height / 2;
+            const relativeX = worldX - centerX;
+            const relativeY = worldY - centerY;
+            splitPreviewDirection = Math.abs(relativeY) > Math.abs(relativeX) ? 'horizontal' : 'vertical';
+        } else {
+            splitPreviewBox = null;
+            splitPreviewDirection = null;
+        }
+        draw();
+    } else {
+        splitPreviewBox = null;
+        splitPreviewDirection = null;
+    }
 });
 
 canvasContainer.addEventListener('dragleave', () => {
     canvasContainer.classList.remove('drag-over');
+    splitPreviewBox = null;
+    splitPreviewDirection = null;
+    draw();
 });
 
 canvasContainer.addEventListener('drop', (e) => {
     e.preventDefault();
     canvasContainer.classList.remove('drag-over');
     
+    // Clear split preview
+    splitPreviewBox = null;
+    splitPreviewDirection = null;
+    draggedShapeType = null;
+    
     const shapeType = e.dataTransfer.getData('shapeType');
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left - canvasOffset.x - 40;
-    const y = e.clientY - rect.top - canvasOffset.y - 40;
+    const dropX = e.clientX - rect.left;
+    const dropY = e.clientY - rect.top;
+    const worldX = dropX - canvasOffset.x;
+    const worldY = dropY - canvasOffset.y;
     
     if (shapeType === 'circle') {
-        circles.push(new Circle(x, y));
+        circles.push(new Circle(worldX - 40, worldY - 40));
     } else if (shapeType === 'box') {
-        boxes.push(new Box(x, y));
+        // Check if dropping on top of an existing box
+        let targetBox = null;
+        for (const box of boxes) {
+            if (box.contains(dropX, dropY)) {
+                targetBox = box;
+                break;
+            }
+        }
+        
+        if (targetBox) {
+            // Split the box
+            const centerX = targetBox.x + targetBox.width / 2;
+            const centerY = targetBox.y + targetBox.height / 2;
+            
+            // Determine split direction based on drop position
+            const relativeX = worldX - centerX;
+            const relativeY = worldY - centerY;
+            const isHorizontalSplit = Math.abs(relativeY) > Math.abs(relativeX);
+            
+            // Generate a unique group ID for these split boxes
+            const groupId = Date.now() + Math.random();
+            
+            let box1, box2;
+            
+            if (isHorizontalSplit) {
+                // Split horizontally (widthwise) - top and bottom boxes
+                const halfHeight = targetBox.height / 2;
+                
+                // Top box (original position, keeps original properties)
+                box1 = new Box(targetBox.x, targetBox.y);
+                box1.width = targetBox.width;
+                box1.height = halfHeight;
+                box1.color = targetBox.color;
+                box1.text = targetBox.text;
+                box1.groupId = groupId;
+                
+                // Bottom box (new box, gets new properties)
+                box2 = new Box(targetBox.x, targetBox.y + halfHeight);
+                box2.width = targetBox.width;
+                box2.height = halfHeight;
+                box2.color = currentColor; // New color from picker
+                box2.text = ''; // Empty text
+                box2.groupId = groupId;
+                
+                // Remove original box
+                const index = boxes.indexOf(targetBox);
+                boxes.splice(index, 1);
+                
+                // Add new boxes
+                boxes.push(box1, box2);
+                
+                // Create connection between the two boxes
+                const connection = new Connection(box1, 'bottom', box2, 'top', 'both', currentColor);
+                connections.push(connection);
+    } else {
+                // Split vertically (lengthwise) - left and right boxes
+                const halfWidth = targetBox.width / 2;
+                
+                // Left box (original position, keeps original properties)
+                box1 = new Box(targetBox.x, targetBox.y);
+                box1.width = halfWidth;
+                box1.height = targetBox.height;
+                box1.color = targetBox.color;
+                box1.text = targetBox.text;
+                box1.groupId = groupId;
+                
+                // Right box (new box, gets new properties)
+                box2 = new Box(targetBox.x + halfWidth, targetBox.y);
+                box2.width = halfWidth;
+                box2.height = targetBox.height;
+                box2.color = currentColor; // New color from picker
+                box2.text = ''; // Empty text
+                box2.groupId = groupId;
+                
+                // Remove original box
+                const index = boxes.indexOf(targetBox);
+                boxes.splice(index, 1);
+                
+                // Add new boxes
+                boxes.push(box1, box2);
+                
+                // Create connection between the two boxes
+                const connection = new Connection(box1, 'right', box2, 'left', 'both', currentColor);
+                connections.push(connection);
+            }
+        } else {
+            // Normal box placement
+            boxes.push(new Box(worldX - 40, worldY - 40));
+        }
     } else if (shapeType === 'text') {
-        const textObj = new TextObject(x, y);
+        const textObj = new TextObject(worldX - 40, worldY - 40);
         textObjects.push(textObj);
         selectedShapes.clear();
         selectedShapes.add(textObj);
@@ -1210,20 +1451,72 @@ canvas.addEventListener('mousedown', (e) => {
     if (currentTool === 'select' && selectedShapes.size === 1) {
         const selectedShape = Array.from(selectedShapes)[0];
         if (selectedShape instanceof Box || selectedShape instanceof Circle || selectedShape instanceof TextObject) {
-            const handle = selectedShape.getResizeHandleAt(x, y);
+            let handle = null;
+            let bounds = null;
+            
+            // If it's a box in a group, check for group resize handles
+            if (selectedShape instanceof Box && selectedShape.isGroupResize()) {
+                const groupBounds = selectedShape.getGroupBounds();
+                const padding = 20;
+                const screenX = groupBounds.x + canvasOffset.x - padding;
+                const screenY = groupBounds.y + canvasOffset.y - padding;
+                const boxWidth = groupBounds.width + (padding * 2);
+                const boxHeight = groupBounds.height + (padding * 2);
+                
+                const handles = {
+                    'nw': { x: screenX, y: screenY },
+                    'n': { x: screenX + boxWidth / 2, y: screenY },
+                    'ne': { x: screenX + boxWidth, y: screenY },
+                    'e': { x: screenX + boxWidth, y: screenY + boxHeight / 2 },
+                    'se': { x: screenX + boxWidth, y: screenY + boxHeight },
+                    's': { x: screenX + boxWidth / 2, y: screenY + boxHeight },
+                    'sw': { x: screenX, y: screenY + boxHeight },
+                    'w': { x: screenX, y: screenY + boxHeight / 2 }
+                };
+                
+                for (const [handleName, handlePos] of Object.entries(handles)) {
+                    const dx = x - handlePos.x;
+                    const dy = y - handlePos.y;
+                    if (Math.abs(dx) <= 8 && Math.abs(dy) <= 8) {
+                        handle = handleName;
+                        bounds = groupBounds;
+                        break;
+                    }
+                }
+            } else {
+                // Normal resize handle check
+                handle = selectedShape.getResizeHandleAt(x, y);
+                if (handle) {
+                    bounds = selectedShape.getBounds();
+                }
+            }
+            
             if (handle) {
                 isResizing = true;
                 resizeHandle = handle;
                 resizeStartPos.x = x;
                 resizeStartPos.y = y;
                 resizeStartShape = selectedShape;
-                const bounds = selectedShape.getBounds();
                 resizeStartBounds = {
                     x: bounds.x,
                     y: bounds.y,
                     width: bounds.width,
                     height: bounds.height
                 };
+                
+                // Store original states of all boxes in the group if it's a group resize
+                if (selectedShape instanceof Box && selectedShape.isGroupResize()) {
+                    const group = selectedShape.getGroup();
+                    resizeStartBoxStates = Array.from(group).map(box => ({
+                        x: box.x,
+                        y: box.y,
+                        width: box.width,
+                        height: box.height
+                    }));
+                } else {
+                    resizeStartBoxStates = [];
+                }
+                
                 draw(x, y);
                 return;
             }
@@ -1258,6 +1551,8 @@ canvas.addEventListener('mousedown', (e) => {
             }
         }
     }
+    
+    // Note: Boxes in groups can be selected individually - no special handling needed here
     
     // Check circles if no box edge found
     if (!clickedShape) {
@@ -1353,7 +1648,7 @@ canvas.addEventListener('mousedown', (e) => {
                     selectedShapes.add(clickedObject);
                 }
             } else {
-                // Single select
+                // Single select - boxes can be selected individually even if in a group
                 selectedShapes.clear();
                 selectedShapes.add(clickedObject);
             }
@@ -1449,41 +1744,122 @@ canvas.addEventListener('mousemove', (e) => {
         const handle = resizeHandle;
         
         if (resizeStartShape instanceof Box) {
-            let newX = resizeStartBounds.x;
-            let newY = resizeStartBounds.y;
-            let newWidth = resizeStartBounds.width;
-            let newHeight = resizeStartBounds.height;
-            
-            // Adjust based on which handle is being dragged
-            if (handle.includes('w')) {
-                newX += deltaX;
-                newWidth -= deltaX;
+            // Check if this is a group resize
+            if (resizeStartShape.isGroupResize()) {
+                // Resize the entire group as a rectangle
+                const group = resizeStartShape.getGroup();
+                
+                let newX = resizeStartBounds.x;
+                let newY = resizeStartBounds.y;
+                let newWidth = resizeStartBounds.width;
+                let newHeight = resizeStartBounds.height;
+                
+                // Adjust based on which handle is being dragged
+                if (handle.includes('w')) {
+                    newX += deltaX;
+                    newWidth -= deltaX;
+                }
+                if (handle.includes('e')) {
+                    newWidth += deltaX;
+                }
+                if (handle.includes('n')) {
+                    newY += deltaY;
+                    newHeight -= deltaY;
+                }
+                if (handle.includes('s')) {
+                    newHeight += deltaY;
+                }
+                
+                // Ensure minimum size
+                if (newWidth < 40) {
+                    if (handle.includes('w')) {
+                        const diff = 40 - newWidth;
+                        newX -= diff;
+                        newWidth = 40;
+    } else {
+                        newWidth = 40;
+                    }
+                }
+                if (newHeight < 40) {
+                    if (handle.includes('n')) {
+                        const diff = 40 - newHeight;
+                        newY -= diff;
+                        newHeight = 40;
+                    } else {
+                        newHeight = 40;
+                    }
+                }
+                
+                // Only proceed if we have valid dimensions
+                if (newWidth > 0 && newHeight > 0 && resizeStartBoxStates.length > 0) {
+                    // Calculate scale factors
+                    const scaleX = resizeStartBounds.width > 0 ? newWidth / resizeStartBounds.width : 1;
+                    const scaleY = resizeStartBounds.height > 0 ? newHeight / resizeStartBounds.height : 1;
+                    
+                    // Resize all boxes in the group proportionally using stored original states
+                    const groupArray = Array.from(group);
+                    groupArray.forEach((groupBox, index) => {
+                        if (index < resizeStartBoxStates.length) {
+                            const origState = resizeStartBoxStates[index];
+                            
+                            // Calculate relative position within the original group bounds
+                            const relX = origState.x - resizeStartBounds.x;
+                            const relY = origState.y - resizeStartBounds.y;
+                            
+                            // Apply scale and offset
+                            groupBox.x = newX + relX * scaleX;
+                            groupBox.y = newY + relY * scaleY;
+                            groupBox.width = origState.width * scaleX;
+                            groupBox.height = origState.height * scaleY;
+                            
+                            // Ensure minimum size
+                            if (groupBox.width < 20) {
+                                groupBox.width = 20;
+                            }
+                            if (groupBox.height < 20) {
+                                groupBox.height = 20;
+                            }
+                        }
+                    });
+                }
+            } else {
+                // Normal single box resize
+                let newX = resizeStartBounds.x;
+                let newY = resizeStartBounds.y;
+                let newWidth = resizeStartBounds.width;
+                let newHeight = resizeStartBounds.height;
+                
+                // Adjust based on which handle is being dragged
+                if (handle.includes('w')) {
+                    newX += deltaX;
+                    newWidth -= deltaX;
+                }
+                if (handle.includes('e')) {
+                    newWidth += deltaX;
+                }
+                if (handle.includes('n')) {
+                    newY += deltaY;
+                    newHeight -= deltaY;
+                }
+                if (handle.includes('s')) {
+                    newHeight += deltaY;
+                }
+                
+                // Ensure minimum size
+                if (newWidth < 20) {
+                    if (handle.includes('w')) newX -= (20 - newWidth);
+                    newWidth = 20;
+                }
+                if (newHeight < 20) {
+                    if (handle.includes('n')) newY -= (20 - newHeight);
+                    newHeight = 20;
+                }
+                
+                resizeStartShape.x = newX;
+                resizeStartShape.y = newY;
+                resizeStartShape.width = newWidth;
+                resizeStartShape.height = newHeight;
             }
-            if (handle.includes('e')) {
-                newWidth += deltaX;
-            }
-            if (handle.includes('n')) {
-                newY += deltaY;
-                newHeight -= deltaY;
-            }
-            if (handle.includes('s')) {
-                newHeight += deltaY;
-            }
-            
-            // Ensure minimum size
-            if (newWidth < 20) {
-                if (handle.includes('w')) newX -= (20 - newWidth);
-                newWidth = 20;
-            }
-            if (newHeight < 20) {
-                if (handle.includes('n')) newY -= (20 - newHeight);
-                newHeight = 20;
-            }
-            
-            resizeStartShape.x = newX;
-            resizeStartShape.y = newY;
-            resizeStartShape.width = newWidth;
-            resizeStartShape.height = newHeight;
         } else if (resizeStartShape instanceof Circle) {
             let newX = resizeStartBounds.x;
             let newY = resizeStartBounds.y;
@@ -1522,41 +1898,44 @@ canvas.addEventListener('mousemove', (e) => {
             resizeStartShape.radiusY = newHeight / 2;
             resizeStartShape.radius = Math.min(resizeStartShape.radiusX, resizeStartShape.radiusY); // For backward compatibility
         } else if (resizeStartShape instanceof TextObject) {
+            // For text objects: only corner handles (nw, ne, sw, se)
+            // Calculate new font size based on vertical distance (height)
+            // Keep the opposite corner fixed
             let newX = resizeStartBounds.x;
             let newY = resizeStartBounds.y;
-            let newWidth = resizeStartBounds.width;
             let newHeight = resizeStartBounds.height;
             
-            // Adjust based on which handle is being dragged
-            if (handle.includes('w')) {
+            // Adjust based on which corner handle is being dragged
+            if (handle === 'nw') {
+                // Top-left corner - keep bottom-right fixed, adjust top-left
                 newX += deltaX;
-                newWidth -= deltaX;
-            }
-            if (handle.includes('e')) {
-                newWidth += deltaX;
-            }
-            if (handle.includes('n')) {
                 newY += deltaY;
                 newHeight -= deltaY;
-            }
-            if (handle.includes('s')) {
+            } else if (handle === 'ne') {
+                // Top-right corner - keep bottom-left fixed, adjust top-right
+                newY += deltaY;
+                newHeight -= deltaY;
+            } else if (handle === 'sw') {
+                // Bottom-left corner - keep top-right fixed, adjust bottom-left
+                newX += deltaX;
+                newHeight += deltaY;
+            } else if (handle === 'se') {
+                // Bottom-right corner - keep top-left fixed, adjust bottom-right
                 newHeight += deltaY;
             }
             
-            // Ensure minimum size
-            if (newWidth < 20) {
-                if (handle.includes('w')) newX -= (20 - newWidth);
-                newWidth = 20;
-            }
+            // Ensure minimum font size
             if (newHeight < 10) {
-                if (handle.includes('n')) newY -= (10 - newHeight);
+                if (handle.includes('n')) {
+                    const diff = 10 - newHeight;
+                    newY -= diff;
+                }
                 newHeight = 10;
             }
             
+            // Update text object
             resizeStartShape.x = newX;
             resizeStartShape.y = newY;
-            // For text, resize primarily affects font size (height)
-            // Width is determined by text content, so we adjust font size based on height
             resizeStartShape.fontSize = Math.max(10, Math.round(newHeight));
         }
         
@@ -1577,8 +1956,20 @@ canvas.addEventListener('mousemove', (e) => {
                 const newX = startX + deltaX;
                 const newY = startY + deltaY;
                 
-                shape.x = newX;
-                shape.y = newY;
+                // If this is a box with a group, move all boxes in the group together
+                if (shape instanceof Box && shape.groupId) {
+                    const group = shape.getGroup();
+                    const groupDeltaX = newX - shape.x;
+                    const groupDeltaY = newY - shape.y;
+                    
+                    group.forEach(groupBox => {
+                        groupBox.x += groupDeltaX;
+                        groupBox.y += groupDeltaY;
+                    });
+                } else {
+                    shape.x = newX;
+                    shape.y = newY;
+                }
                 
                 // Keep within reasonable bounds (optional)
                 if (shape instanceof Circle) {
@@ -1621,7 +2012,41 @@ canvas.addEventListener('mousemove', (e) => {
         if (currentTool === 'select' && selectedShapes.size === 1) {
             const selectedShape = Array.from(selectedShapes)[0];
             if (selectedShape instanceof Box || selectedShape instanceof Circle || selectedShape instanceof TextObject) {
-                const handle = selectedShape.getResizeHandleAt(x, y);
+                let handle = null;
+                
+                // If it's a box in a group, check for group resize handles
+                if (selectedShape instanceof Box && selectedShape.isGroupResize()) {
+                    const groupBounds = selectedShape.getGroupBounds();
+                    const padding = 20;
+                    const screenX = groupBounds.x + canvasOffset.x - padding;
+                    const screenY = groupBounds.y + canvasOffset.y - padding;
+                    const boxWidth = groupBounds.width + (padding * 2);
+                    const boxHeight = groupBounds.height + (padding * 2);
+                    
+                    const handles = {
+                        'nw': { x: screenX, y: screenY },
+                        'n': { x: screenX + boxWidth / 2, y: screenY },
+                        'ne': { x: screenX + boxWidth, y: screenY },
+                        'e': { x: screenX + boxWidth, y: screenY + boxHeight / 2 },
+                        'se': { x: screenX + boxWidth, y: screenY + boxHeight },
+                        's': { x: screenX + boxWidth / 2, y: screenY + boxHeight },
+                        'sw': { x: screenX, y: screenY + boxHeight },
+                        'w': { x: screenX, y: screenY + boxHeight / 2 }
+                    };
+                    
+                    for (const [handleName, handlePos] of Object.entries(handles)) {
+                        const dx = x - handlePos.x;
+                        const dy = y - handlePos.y;
+                        if (Math.abs(dx) <= 8 && Math.abs(dy) <= 8) {
+                            handle = handleName;
+                            break;
+                        }
+                    }
+                } else {
+                    // Normal resize handle check
+                    handle = selectedShape.getResizeHandleAt(x, y);
+                }
+                
                 if (handle) {
                     hoveringResizeHandle = true;
                     // Set cursor based on handle position
@@ -1763,6 +2188,7 @@ canvas.addEventListener('mouseup', (e) => {
     isResizing = false;
     resizeHandle = null;
     resizeStartShape = null;
+    resizeStartBoxStates = [];
     dragStartLassoPoints = null; // Reset lasso points reference
     canvas.style.cursor = currentTool === 'lasso' ? 'crosshair' : 'default';
 });
@@ -1773,6 +2199,7 @@ canvas.addEventListener('mouseleave', () => {
     isResizing = false;
     resizeHandle = null;
     resizeStartShape = null;
+    resizeStartBoxStates = [];
     dragStartLassoPoints = null; // Reset lasso points reference
     if (isLassoActive) {
         isLassoActive = false;
