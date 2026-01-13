@@ -34,7 +34,8 @@ let panStart = { x: 0, y: 0 };
 let panOffset = { x: 0, y: 0 };
 let canvasOffset = { x: 0, y: 0 };
 let editingText = null;
-let currentColor = '#667eea';
+// Initialize currentColor from the color picker's value
+let currentColor = colorPicker.value;
 
 // Shift-click placement state
 let selectedShapeTypeForPlacement = null; // 'box', 'circle', 'text', or null
@@ -354,7 +355,7 @@ class TextObject extends DrawableObject {
         this.text = 'Text';
         this.fontSize = 20;
         this.color = currentColor;
-        this.textColor = '#000000';
+        this.textColor = currentColor; // Use current color from color picker
     }
 
     draw(isSelected = false) {
