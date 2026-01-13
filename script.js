@@ -36,6 +36,9 @@ let canvasOffset = { x: 0, y: 0 };
 let editingText = null;
 let currentColor = '#667eea';
 
+// Shift-click placement state
+let selectedShapeTypeForPlacement = null; // 'box', 'circle', 'text', or null
+
 // Lasso selection
 let isLassoActive = false;
 let lassoPoints = [];
@@ -757,6 +760,7 @@ colorPicker.addEventListener('change', (e) => {
 });
 
 // Drag and drop from toolbar
+// Drag and drop handlers
 draggableBox.addEventListener('dragstart', (e) => {
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('shapeType', 'box');
@@ -787,6 +791,31 @@ draggableText.addEventListener('dragend', () => {
     draggableText.classList.remove('dragging');
 });
 
+// Shift-click handlers for multiple placement
+draggableBox.addEventListener('click', (e) => {
+    if (e.shiftKey) {
+        e.preventDefault();
+        selectedShapeTypeForPlacement = 'box';
+        canvas.style.cursor = 'crosshair';
+    }
+});
+
+draggableCircle.addEventListener('click', (e) => {
+    if (e.shiftKey) {
+        e.preventDefault();
+        selectedShapeTypeForPlacement = 'circle';
+        canvas.style.cursor = 'crosshair';
+    }
+});
+
+draggableText.addEventListener('click', (e) => {
+    if (e.shiftKey) {
+        e.preventDefault();
+        selectedShapeTypeForPlacement = 'text';
+        canvas.style.cursor = 'crosshair';
+    }
+});
+
 canvasContainer.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
@@ -807,17 +836,11 @@ canvasContainer.addEventListener('drop', (e) => {
     const y = e.clientY - rect.top - canvasOffset.y - 40;
     
     if (shapeType === 'circle') {
-        const snappedX = snapToGrid(x);
-        const snappedY = snapToGrid(y);
-        circles.push(new Circle(snappedX, snappedY));
+        circles.push(new Circle(x, y));
     } else if (shapeType === 'box') {
-        const snappedX = snapToGrid(x);
-        const snappedY = snapToGrid(y);
-        boxes.push(new Box(snappedX, snappedY));
+        boxes.push(new Box(x, y));
     } else if (shapeType === 'text') {
-        const snappedX = snapToGrid(x);
-        const snappedY = snapToGrid(y);
-        const textObj = new TextObject(snappedX, snappedY);
+        const textObj = new TextObject(x, y);
         textObjects.push(textObj);
         selectedShapes.clear();
         selectedShapes.add(textObj);
@@ -827,11 +850,46 @@ canvasContainer.addEventListener('drop', (e) => {
     draw();
 });
 
+// Helper function to place a shape at the given position (centered on click)
+function placeShapeAt(shapeType, x, y) {
+    // Convert screen coordinates to world coordinates
+    let worldX = x - canvasOffset.x;
+    let worldY = y - canvasOffset.y;
+    
+    // Center the shape on the click position
+    if (shapeType === 'circle' || shapeType === 'box') {
+        // Both box and circle are 80x80, so center offset is -40
+        worldX -= 40;
+        worldY -= 40;
+    }
+    // Text objects don't need centering - they start at the click position
+    
+    if (shapeType === 'circle') {
+        circles.push(new Circle(worldX, worldY));
+    } else if (shapeType === 'box') {
+        boxes.push(new Box(worldX, worldY));
+    } else if (shapeType === 'text') {
+        const textObj = new TextObject(worldX, worldY);
+        textObjects.push(textObj);
+        selectedShapes.clear();
+        selectedShapes.add(textObj);
+        // Automatically start editing the text after placement
+        startEditingText(textObj);
+    }
+    draw();
+}
+
 // Canvas mouse events
 canvas.addEventListener('mousedown', (e) => {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    
+    // Check for shift-click placement mode
+    if (selectedShapeTypeForPlacement && e.shiftKey && e.button === 0) {
+        placeShapeAt(selectedShapeTypeForPlacement, x, y);
+        return;
+    }
     
     if (currentTool === 'lasso') {
         // FIRST check if clicking within completed lasso shape - this must happen before starting new lasso
@@ -1116,12 +1174,8 @@ canvas.addEventListener('mousemove', (e) => {
         dragStartShapes.forEach(({ shape, x: startX, y: startY }) => {
             if (selectedShapes.has(shape)) {
                 // Calculate new position
-                let newX = startX + deltaX;
-                let newY = startY + deltaY;
-                
-                // Snap to grid
-                newX = snapToGrid(newX);
-                newY = snapToGrid(newY);
+                const newX = startX + deltaX;
+                const newY = startY + deltaY;
                 
                 shape.x = newX;
                 shape.y = newY;
@@ -1458,6 +1512,14 @@ canvas.addEventListener('contextmenu', (e) => {
     
     if (clickedShape) {
         deleteShape(clickedShape);
+    }
+});
+
+// Clear placement mode when Shift is released
+window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') {
+        selectedShapeTypeForPlacement = null;
+        canvas.style.cursor = '';
     }
 });
 
