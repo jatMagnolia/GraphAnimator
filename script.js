@@ -9,6 +9,22 @@ const colorPicker = document.getElementById('colorPicker');
 const selectTool = document.getElementById('selectTool');
 const lassoTool = document.getElementById('lassoTool');
 const arrowDirectionPanel = document.getElementById('arrowDirectionPanel');
+const debugPanel = document.getElementById('debugPanel');
+const debugContent = document.getElementById('debugContent');
+
+// Debug logging function
+function debugLog(message) {
+    if (debugContent) {
+        const timestamp = new Date().toLocaleTimeString();
+        debugContent.textContent = `[${timestamp}] ${message}\n` + debugContent.textContent;
+        // Keep only last 20 lines
+        const lines = debugContent.textContent.split('\n');
+        if (lines.length > 20) {
+            debugContent.textContent = lines.slice(0, 20).join('\n');
+        }
+    }
+    console.log(message);
+}
 
 // Set canvas size
 function resizeCanvas() {
@@ -223,7 +239,26 @@ class Box extends DrawableObject {
     }
 
     // Get the edge point based on edge name ('top', 'bottom', 'left', 'right')
+    // For grouped boxes, returns the edge point of the group bounds
     getEdgePoint(edge) {
+        // If this box is part of a group, use the group bounds
+        if (this.isGroupResize()) {
+            const groupBounds = this.getGroupBounds();
+            switch(edge) {
+                case 'top':
+                    return { x: groupBounds.x + groupBounds.width / 2, y: groupBounds.y };
+                case 'bottom':
+                    return { x: groupBounds.x + groupBounds.width / 2, y: groupBounds.y + groupBounds.height };
+                case 'left':
+                    return { x: groupBounds.x, y: groupBounds.y + groupBounds.height / 2 };
+                case 'right':
+                    return { x: groupBounds.x + groupBounds.width, y: groupBounds.y + groupBounds.height / 2 };
+                default:
+                    return { x: groupBounds.x + groupBounds.width / 2, y: groupBounds.y + groupBounds.height / 2 };
+            }
+        }
+        
+        // For single boxes, use the box's own bounds
         switch(edge) {
             case 'top':
                 return { x: this.x + this.width / 2, y: this.y };
@@ -238,22 +273,106 @@ class Box extends DrawableObject {
         }
     }
 
+    // Check if an edge is a shared edge (split line) between boxes in a group
+    isSharedEdge(edge) {
+        if (!this.groupId) return false;
+        
+        const group = this.getGroup();
+        if (group.size < 2) return false;
+        
+        const tolerance = 0.1; // Small tolerance for floating point precision
+        
+        // Check if this edge is shared with another box in the group
+        for (const otherBox of group) {
+            if (otherBox === this) continue;
+            
+            // For horizontal split: check if this box's bottom edge touches other box's top edge
+            // or this box's top edge touches other box's bottom edge
+            if (edge === 'bottom' && Math.abs(otherBox.y - (this.y + this.height)) < tolerance && 
+                this.x < otherBox.x + otherBox.width && this.x + this.width > otherBox.x) {
+                return true;
+            }
+            if (edge === 'top' && Math.abs(this.y - (otherBox.y + otherBox.height)) < tolerance &&
+                this.x < otherBox.x + otherBox.width && this.x + this.width > otherBox.x) {
+                return true;
+            }
+            
+            // For vertical split: check if this box's right edge touches other box's left edge
+            // or this box's left edge touches other box's right edge
+            if (edge === 'right' && Math.abs(otherBox.x - (this.x + this.width)) < tolerance &&
+                this.y < otherBox.y + otherBox.height && this.y + this.height > otherBox.y) {
+                return true;
+            }
+            if (edge === 'left' && Math.abs(this.x - (otherBox.x + otherBox.width)) < tolerance &&
+                this.y < otherBox.y + otherBox.height && this.y + this.height > otherBox.y) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
     // Check if an edge is already connected
     isEdgeConnected(edge) {
         // Check if this edge is already used in any connection
+        // But ignore connections between boxes in the same group (those are internal to the group)
         for (const conn of connections) {
             if ((conn.fromShape === this && conn.fromEdge === edge) ||
                 (conn.toShape === this && conn.toEdge === edge)) {
+                // Don't count connections between boxes in the same group as "connected"
+                // These are internal group connections, not external connections
+                if (this.groupId && conn.fromShape instanceof Box && conn.toShape instanceof Box) {
+                    if (conn.fromShape.groupId === this.groupId && conn.toShape.groupId === this.groupId) {
+                        continue; // Skip internal group connections
+                    }
+                }
                 return true;
             }
         }
         return false;
     }
-    
+
     // Detect which edge was clicked (with some tolerance)
     getEdgeAt(x, y, tolerance = 10) {
         const worldX = x - canvasOffset.x;
         const worldY = y - canvasOffset.y;
+        
+        // For grouped boxes, first check if click is directly on a shared edge (split line)
+        if (this.isGroupResize()) {
+            const group = this.getGroup();
+            // Check if click is on any shared edge (split line) between boxes in the group
+            for (const box of group) {
+                for (const otherBox of group) {
+                    if (box === otherBox) continue;
+                    
+                    // Check horizontal split line (between top and bottom boxes)
+                    const edgeTolerance = 0.1; // Small tolerance for floating point precision
+                    if (Math.abs((box.y + box.height) - otherBox.y) < edgeTolerance || 
+                        Math.abs((otherBox.y + otherBox.height) - box.y) < edgeTolerance) {
+                        const splitY = Math.abs((box.y + box.height) - otherBox.y) < edgeTolerance ? 
+                            (box.y + box.height) : (otherBox.y + otherBox.height);
+                        const minX = Math.max(box.x, otherBox.x);
+                        const maxX = Math.min(box.x + box.width, otherBox.x + otherBox.width);
+                        if (Math.abs(worldY - splitY) < tolerance && worldX >= minX - 1 && worldX <= maxX + 1) {
+                            return null; // Click is on horizontal split line
+                        }
+                    }
+                    
+                    // Check vertical split line (between left and right boxes)
+                    if (Math.abs((box.x + box.width) - otherBox.x) < edgeTolerance || 
+                        Math.abs((otherBox.x + otherBox.width) - box.x) < edgeTolerance) {
+                        const splitX = Math.abs((box.x + box.width) - otherBox.x) < edgeTolerance ? 
+                            (box.x + box.width) : (otherBox.x + otherBox.width);
+                        const minY = Math.max(box.y, otherBox.y);
+                        const maxY = Math.min(box.y + box.height, otherBox.y + otherBox.height);
+                        if (Math.abs(worldX - splitX) < tolerance && worldY >= minY - 1 && worldY <= maxY + 1) {
+                            return null; // Click is on vertical split line
+                        }
+                    }
+                }
+            }
+        }
+        
         const centerX = this.x + this.width / 2;
         const centerY = this.y + this.height / 2;
         const dx = worldX - centerX;
@@ -276,6 +395,11 @@ class Box extends DrawableObject {
             return null;
         }
         
+        // Don't allow connections on shared edges (split lines between grouped boxes)
+        if (detectedEdge && this.isSharedEdge(detectedEdge)) {
+            return null;
+        }
+        
         // Don't allow connections on already connected edges
         if (detectedEdge && this.isEdgeConnected(detectedEdge)) {
             return null;
@@ -289,19 +413,67 @@ class Box extends DrawableObject {
     getBestEdgeForConnection(x, y) {
         const worldX = x - canvasOffset.x;
         const worldY = y - canvasOffset.y;
-        const centerX = this.x + this.width / 2;
-        const centerY = this.y + this.height / 2;
+        
+        // For grouped boxes, first check if click is directly on a shared edge (split line)
+        if (this.isGroupResize()) {
+            const group = this.getGroup();
+            // Check if click is on any shared edge (split line) between boxes in the group
+            for (const box of group) {
+                for (const otherBox of group) {
+                    if (box === otherBox) continue;
+                    
+                    // Check horizontal split line (between top and bottom boxes)
+                    const edgeTolerance = 0.1;
+                    if (Math.abs((box.y + box.height) - otherBox.y) < edgeTolerance || 
+                        Math.abs((otherBox.y + otherBox.height) - box.y) < edgeTolerance) {
+                        const splitY = Math.abs((box.y + box.height) - otherBox.y) < edgeTolerance ? 
+                            (box.y + box.height) : (otherBox.y + otherBox.height);
+                        const minX = Math.max(box.x, otherBox.x);
+                        const maxX = Math.min(box.x + box.width, otherBox.x + otherBox.width);
+                        if (Math.abs(worldY - splitY) < 20 && worldX >= minX - 1 && worldX <= maxX + 1) {
+                            return null; // Click is on horizontal split line
+                        }
+                    }
+                    
+                    // Check vertical split line (between left and right boxes)
+                    if (Math.abs((box.x + box.width) - otherBox.x) < edgeTolerance || 
+                        Math.abs((otherBox.x + otherBox.width) - box.x) < edgeTolerance) {
+                        const splitX = Math.abs((box.x + box.width) - otherBox.x) < edgeTolerance ? 
+                            (box.x + box.width) : (otherBox.x + otherBox.width);
+                        const minY = Math.max(box.y, otherBox.y);
+                        const maxY = Math.min(box.y + box.height, otherBox.y + otherBox.height);
+                        if (Math.abs(worldX - splitX) < 20 && worldY >= minY - 1 && worldY <= maxY + 1) {
+                            return null; // Click is on vertical split line
+                        }
+                    }
+                }
+            }
+        }
+        
+        // For grouped boxes, use group bounds
+        let bounds, centerX, centerY;
+        if (this.isGroupResize()) {
+            const groupBounds = this.getGroupBounds();
+            bounds = groupBounds;
+            centerX = groupBounds.x + groupBounds.width / 2;
+            centerY = groupBounds.y + groupBounds.height / 2;
+        } else {
+            bounds = this.getBounds();
+            centerX = this.x + this.width / 2;
+            centerY = this.y + this.height / 2;
+        }
+        
         const dx = worldX - centerX;
         const dy = worldY - centerY;
         
         // Check if point is within the shape bounds (with some padding)
         const padding = 20;
-        const isWithinBounds = worldX >= this.x - padding && worldX <= this.x + this.width + padding &&
-                              worldY >= this.y - padding && worldY <= this.y + this.height + padding;
+        const isWithinBounds = worldX >= bounds.x - padding && worldX <= bounds.x + bounds.width + padding &&
+                              worldY >= bounds.y - padding && worldY <= bounds.y + bounds.height + padding;
         
         if (!isWithinBounds) {
-            return null;
-        }
+        return null;
+    }
         
         // Divide into 4 quadrants - each quadrant maps to one edge
         // This ensures non-overlapping zones
@@ -322,6 +494,59 @@ class Box extends DrawableObject {
         
         // Don't allow connections on split edges
         if (this.splitEdge === proposedEdge) {
+            return null;
+        }
+        
+        // For grouped boxes, check if the proposed edge is actually a shared edge (split line)
+        // This must be checked before isSharedEdge because we need to verify the click is on the split line
+        if (this.isGroupResize()) {
+            const group = this.getGroup();
+            for (const otherBox of group) {
+                if (otherBox === this) continue;
+                
+                // Check if proposed edge is a shared edge with another box
+                let isShared = false;
+                
+                // Horizontal split: check if this box's bottom/top edge touches other box
+                const coordTolerance = 0.1;
+                if (proposedEdge === 'bottom' && Math.abs((this.y + this.height) - otherBox.y) < coordTolerance &&
+                    this.x < otherBox.x + otherBox.width && this.x + this.width > otherBox.x) {
+                    // Check if click is actually on the split line
+                    const splitY = this.y + this.height;
+                    if (Math.abs(worldY - splitY) < 20) {
+                        isShared = true;
+                    }
+                } else if (proposedEdge === 'top' && Math.abs(this.y - (otherBox.y + otherBox.height)) < coordTolerance &&
+                    this.x < otherBox.x + otherBox.width && this.x + this.width > otherBox.x) {
+                    const splitY = this.y;
+                    if (Math.abs(worldY - splitY) < 20) {
+                        isShared = true;
+                    }
+                }
+                
+                // Vertical split: check if this box's right/left edge touches other box
+                if (proposedEdge === 'right' && Math.abs((this.x + this.width) - otherBox.x) < coordTolerance &&
+                    this.y < otherBox.y + otherBox.height && this.y + this.height > otherBox.y) {
+                    const splitX = this.x + this.width;
+                    if (Math.abs(worldX - splitX) < 20) {
+                        isShared = true;
+                    }
+                } else if (proposedEdge === 'left' && Math.abs(this.x - (otherBox.x + otherBox.width)) < coordTolerance &&
+                    this.y < otherBox.y + otherBox.height && this.y + this.height > otherBox.y) {
+                    const splitX = this.x;
+                    if (Math.abs(worldX - splitX) < 20) {
+                        isShared = true;
+                    }
+                }
+                
+                if (isShared) {
+                    return null; // Click is on a split line
+                }
+            }
+        }
+        
+        // Don't allow connections on shared edges (split lines between grouped boxes)
+        if (this.isSharedEdge(proposedEdge)) {
             return null;
         }
         
@@ -1328,8 +1553,8 @@ canvasContainer.addEventListener('drop', (e) => {
             const relativeY = worldY - centerY;
             const isHorizontalSplit = Math.abs(relativeY) > Math.abs(relativeX);
             
-            // Generate a unique group ID for these split boxes
-            const groupId = Date.now() + Math.random();
+            // Use existing groupId if targetBox is already in a group, otherwise create new one
+            const groupId = targetBox.groupId || (Date.now() + Math.random());
             
             let box1, box2;
             
@@ -1354,9 +1579,12 @@ canvasContainer.addEventListener('drop', (e) => {
                     box2.text = targetBox.text;
                     box2.groupId = groupId;
                     
-                    // Create connection: top box to bottom box
-                    const connection = new Connection(box1, 'bottom', box2, 'top', 'both', currentColor);
-                    connections.push(connection);
+                    // Only create connection if boxes are not already in a group together
+                    // (If targetBox was already in a group, the new boxes are just added to that group)
+                    if (!targetBox.groupId) {
+                        const connection = new Connection(box1, 'bottom', box2, 'top', 'both', currentColor);
+                        connections.push(connection);
+                    }
     } else {
                     // New box on bottom, original on top (original behavior)
                     box1 = new Box(targetBox.x, targetBox.y);
@@ -1373,9 +1601,65 @@ canvasContainer.addEventListener('drop', (e) => {
                     box2.text = ''; // Empty text
                     box2.groupId = groupId;
                     
-                    // Create connection: top box to bottom box
-                    const connection = new Connection(box1, 'bottom', box2, 'top', 'both', currentColor);
-                    connections.push(connection);
+                    // Only create connection if boxes are not already in a group together
+                    if (!targetBox.groupId) {
+                        const connection = new Connection(box1, 'bottom', box2, 'top', 'both', currentColor);
+                        connections.push(connection);
+                    }
+                }
+                
+                // Transfer connections from original box to new boxes
+                for (let i = 0; i < connections.length; i++) {
+                    const conn = connections[i];
+                    let updated = false;
+                    
+                    // Check if connection is from targetBox
+                    if (conn.fromShape === targetBox) {
+                        if (isTopSide) {
+                            // Top side: top edge -> box1, bottom edge -> box2, left/right -> box1 (shared)
+                            if (conn.fromEdge === 'top') {
+                                conn.fromShape = box1;
+                            } else if (conn.fromEdge === 'bottom') {
+                                conn.fromShape = box2;
+                            } else {
+                                conn.fromShape = box1; // Left/right edges shared
+                            }
+                        } else {
+                            // Bottom side: top edge -> box1, bottom edge -> box2, left/right -> box1 (shared)
+                            if (conn.fromEdge === 'top') {
+                                conn.fromShape = box1;
+                            } else if (conn.fromEdge === 'bottom') {
+                                conn.fromShape = box2;
+                            } else {
+                                conn.fromShape = box1; // Left/right edges shared
+                            }
+                        }
+                        updated = true;
+                    }
+                    
+                    // Check if connection is to targetBox
+                    if (conn.toShape === targetBox) {
+                        if (isTopSide) {
+                            // Top side: top edge -> box1, bottom edge -> box2, left/right -> box1 (shared)
+                            if (conn.toEdge === 'top') {
+                                conn.toShape = box1;
+                            } else if (conn.toEdge === 'bottom') {
+                                conn.toShape = box2;
+                            } else {
+                                conn.toShape = box1; // Left/right edges shared
+                            }
+                        } else {
+                            // Bottom side: top edge -> box1, bottom edge -> box2, left/right -> box1 (shared)
+                            if (conn.toEdge === 'top') {
+                                conn.toShape = box1;
+                            } else if (conn.toEdge === 'bottom') {
+                                conn.toShape = box2;
+                            } else {
+                                conn.toShape = box1; // Left/right edges shared
+                            }
+                        }
+                        updated = true;
+                    }
                 }
                 
                 // Remove original box
@@ -1405,9 +1689,11 @@ canvasContainer.addEventListener('drop', (e) => {
                     box2.text = targetBox.text;
                     box2.groupId = groupId;
                     
-                    // Create connection: left box to right box
-                    const connection = new Connection(box1, 'right', box2, 'left', 'both', currentColor);
-                    connections.push(connection);
+                    // Only create connection if boxes are not already in a group together
+                    if (!targetBox.groupId) {
+                        const connection = new Connection(box1, 'right', box2, 'left', 'both', currentColor);
+                        connections.push(connection);
+                    }
                 } else {
                     // New box on right, original on left (original behavior)
                     box1 = new Box(targetBox.x, targetBox.y);
@@ -1424,9 +1710,62 @@ canvasContainer.addEventListener('drop', (e) => {
                     box2.text = ''; // Empty text
                     box2.groupId = groupId;
                     
-                    // Create connection: left box to right box
-                    const connection = new Connection(box1, 'right', box2, 'left', 'both', currentColor);
-                    connections.push(connection);
+                    // Only create connection if boxes are not already in a group together
+                    if (!targetBox.groupId) {
+                        const connection = new Connection(box1, 'right', box2, 'left', 'both', currentColor);
+                        connections.push(connection);
+                    }
+                }
+                
+                // Transfer connections from original box to new boxes
+                for (let i = 0; i < connections.length; i++) {
+                    const conn = connections[i];
+                    
+                    // Check if connection is from targetBox
+                    if (conn.fromShape === targetBox) {
+                        if (isLeftSide) {
+                            // Left side: left edge -> box1, right edge -> box2, top/bottom -> box1 (shared)
+                            if (conn.fromEdge === 'left') {
+                                conn.fromShape = box1;
+                            } else if (conn.fromEdge === 'right') {
+                                conn.fromShape = box2;
+                            } else {
+                                conn.fromShape = box1; // Top/bottom edges shared
+                            }
+                        } else {
+                            // Right side: left edge -> box1, right edge -> box2, top/bottom -> box1 (shared)
+                            if (conn.fromEdge === 'left') {
+                                conn.fromShape = box1;
+                            } else if (conn.fromEdge === 'right') {
+                                conn.fromShape = box2;
+                            } else {
+                                conn.fromShape = box1; // Top/bottom edges shared
+                            }
+                        }
+                    }
+                    
+                    // Check if connection is to targetBox
+                    if (conn.toShape === targetBox) {
+                        if (isLeftSide) {
+                            // Left side: left edge -> box1, right edge -> box2, top/bottom -> box1 (shared)
+                            if (conn.toEdge === 'left') {
+                                conn.toShape = box1;
+                            } else if (conn.toEdge === 'right') {
+                                conn.toShape = box2;
+                            } else {
+                                conn.toShape = box1; // Top/bottom edges shared
+                            }
+                        } else {
+                            // Right side: left edge -> box1, right edge -> box2, top/bottom -> box1 (shared)
+                            if (conn.toEdge === 'left') {
+                                conn.toShape = box1;
+                            } else if (conn.toEdge === 'right') {
+                                conn.toShape = box2;
+                            } else {
+                                conn.toShape = box1; // Top/bottom edges shared
+                            }
+                        }
+                    }
                 }
                 
                 // Remove original box
@@ -1637,10 +1976,133 @@ canvas.addEventListener('mousedown', (e) => {
             // Use better edge detection during connection creation (when first anchor is set)
             const useConnectionMode = pendingEdgeSelection !== null;
     
+            // First, check if click is on any split line between grouped boxes
+            // This must happen before checking individual boxes
+            const worldX = x - canvasOffset.x;
+            const worldY = y - canvasOffset.y;
+            let isOnSplitLine = false;
+            
+            debugLog(`=== Click at world(${worldX.toFixed(1)}, ${worldY.toFixed(1)}) ===`);
+            
+            // Check all groups for split lines
+            const processedGroups = new Set();
+            for (const box of boxes) {
+                if (box.groupId && !processedGroups.has(box.groupId)) {
+                    processedGroups.add(box.groupId);
+                    const group = box.getGroup();
+                    if (group.size < 2) continue;
+                    
+                    debugLog(`Checking group ${box.groupId} (${group.size} boxes)`);
+                    
+                    // Check all pairs of boxes in the group for split lines
+                    const groupArray = Array.from(group);
+                    for (let i = 0; i < groupArray.length; i++) {
+                        for (let j = i + 1; j < groupArray.length; j++) {
+                            const box1 = groupArray[i];
+                            const box2 = groupArray[j];
+                            
+                            // Check horizontal split line (boxes touching vertically)
+                            const tolerance = 0.1; // Small tolerance for floating point precision
+                            if (Math.abs((box1.y + box1.height) - box2.y) < tolerance || 
+                                Math.abs((box2.y + box2.height) - box1.y) < tolerance) {
+                                const splitY = Math.abs((box1.y + box1.height) - box2.y) < tolerance ? 
+                                    (box1.y + box1.height) : (box2.y + box2.height);
+                                const minX = Math.max(box1.x, box2.x);
+                                const maxX = Math.min(box1.x + box1.width, box2.x + box2.width);
+                                const distY = Math.abs(worldY - splitY);
+                                const inRangeX = worldX >= minX - 1 && worldX <= maxX + 1;
+                                debugLog(`H-split: Y=${splitY.toFixed(1)}, dist=${distY.toFixed(1)}, X in [${minX.toFixed(1)}, ${maxX.toFixed(1)}], inRange=${inRangeX}`);
+                                if (distY < 20 && inRangeX) {
+                                    isOnSplitLine = true;
+                                    debugLog(`*** FOUND H-SPLIT LINE ***`);
+                                    break;
+                                }
+                            }
+                            
+                            // Check vertical split line (boxes touching horizontally)
+                            if (Math.abs((box1.x + box1.width) - box2.x) < tolerance || 
+                                Math.abs((box2.x + box2.width) - box1.x) < tolerance) {
+                                const splitX = Math.abs((box1.x + box1.width) - box2.x) < tolerance ? 
+                                    (box1.x + box1.width) : (box2.x + box2.width);
+                                const minY = Math.max(box1.y, box2.y);
+                                const maxY = Math.min(box1.y + box1.height, box2.y + box2.height);
+                                const distX = Math.abs(worldX - splitX);
+                                const inRangeY = worldY >= minY - 1 && worldY <= maxY + 1;
+                                debugLog(`V-split: X=${splitX.toFixed(1)}, dist=${distX.toFixed(1)}, Y in [${minY.toFixed(1)}, ${maxY.toFixed(1)}], inRange=${inRangeY}`);
+                                if (distX < 20 && inRangeY) {
+                                    isOnSplitLine = true;
+                                    debugLog(`*** FOUND V-SPLIT LINE ***`);
+                                    break;
+                                }
+                            }
+                        }
+                        if (isOnSplitLine) break;
+                    }
+                    if (isOnSplitLine) break;
+                }
+            }
+            
+            // If click is on a split line, don't allow connection creation
+            if (isOnSplitLine) {
+                debugLog(`PRE-CHECK: BLOCKED - on split line`);
+                draw(x, y);
+                return;
+            } else {
+                debugLog(`PRE-CHECK: No split line found`);
+            }
+    
     // Check boxes first
     for (const box of boxes) {
                 if (useConnectionMode) {
                     // During connection creation, use larger detection zones
+                    // But first check if this would be on a split line - do this BEFORE calling getBestEdgeForConnection
+                    const worldX = x - canvasOffset.x;
+                    const worldY = y - canvasOffset.y;
+                    let onSplitLine = false;
+                    
+                    // Check if click is on any split line involving this box
+                    if (box.groupId) {
+                        const group = box.getGroup();
+                        if (group.size > 1) {
+                            for (const otherBox of group) {
+                                if (otherBox === box) continue;
+                                const tol = 0.1;
+                                
+                                // Check horizontal split
+                                if ((Math.abs((box.y + box.height) - otherBox.y) < tol || 
+                                     Math.abs((otherBox.y + otherBox.height) - box.y) < tol) &&
+                                    box.x < otherBox.x + otherBox.width && box.x + box.width > otherBox.x) {
+                                    const splitY = Math.abs((box.y + box.height) - otherBox.y) < tol ? 
+                                        (box.y + box.height) : (otherBox.y + otherBox.height);
+                                    const minX = Math.max(box.x, otherBox.x);
+                                    const maxX = Math.min(box.x + box.width, otherBox.x + otherBox.width);
+                                    if (Math.abs(worldY - splitY) < 30 && worldX >= minX - 2 && worldX <= maxX + 2) {
+                                        onSplitLine = true;
+                                        break;
+                                    }
+                                }
+                                
+                                // Check vertical split
+                                if ((Math.abs((box.x + box.width) - otherBox.x) < tol || 
+                                     Math.abs((otherBox.x + otherBox.width) - box.x) < tol) &&
+                                    box.y < otherBox.y + otherBox.height && box.y + box.height > otherBox.y) {
+                                    const splitX = Math.abs((box.x + box.width) - otherBox.x) < tol ? 
+                                        (box.x + box.width) : (otherBox.x + otherBox.width);
+                                    const minY = Math.max(box.y, otherBox.y);
+                                    const maxY = Math.min(box.y + box.height, otherBox.y + otherBox.height);
+                                    if (Math.abs(worldX - splitX) < 30 && worldY >= minY - 2 && worldY <= maxY + 2) {
+                                        onSplitLine = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (onSplitLine) {
+                        continue; // Skip this box, click is on split line
+                    }
+                    
                     clickedEdge = box.getBestEdgeForConnection(x, y);
                     if (clickedEdge) {
                         clickedShape = box;
@@ -1685,6 +2147,96 @@ canvas.addEventListener('mousedown', (e) => {
     }
     
     if (clickedShape && clickedEdge) {
+        // Debug logging
+        debugLog(`Edge clicked: ${clickedEdge} on ${clickedShape instanceof Box ? 'Box' : 'Circle'}`);
+        if (clickedShape instanceof Box && clickedShape.groupId) {
+            const group = clickedShape.getGroup();
+            debugLog(`Box is in group (${group.size} boxes), groupId: ${clickedShape.groupId}`);
+        }
+        
+        // Final check: if the clicked shape is a grouped box, verify the edge isn't on a split line
+        // This is the last line of defense - check ALL groups, not just the clicked shape's group
+        const worldX = x - canvasOffset.x;
+        const worldY = y - canvasOffset.y;
+        let isOnAnySplitLine = false;
+        let splitLineInfo = '';
+        
+        // Check all groups for split lines
+        const processedGroups = new Set();
+        for (const box of boxes) {
+            if (box.groupId && !processedGroups.has(box.groupId)) {
+                processedGroups.add(box.groupId);
+                const group = box.getGroup();
+                if (group.size < 2) continue;
+                
+                const groupArray = Array.from(group);
+                for (let i = 0; i < groupArray.length; i++) {
+                    for (let j = i + 1; j < groupArray.length; j++) {
+                        const box1 = groupArray[i];
+                        const box2 = groupArray[j];
+                        const tol = 0.1;
+                        
+                        // Check horizontal split line
+                        if (Math.abs((box1.y + box1.height) - box2.y) < tol || 
+                            Math.abs((box2.y + box2.height) - box1.y) < tol) {
+                            const splitY = Math.abs((box1.y + box1.height) - box2.y) < tol ? 
+                                (box1.y + box1.height) : (box2.y + box2.height);
+                            const minX = Math.max(box1.x, box2.x);
+                            const maxX = Math.min(box1.x + box1.width, box2.x + box2.width);
+                            const distY = Math.abs(worldY - splitY);
+                            const inRangeX = worldX >= minX - 2 && worldX <= maxX + 2;
+                            debugLog(`H-split check: splitY=${splitY.toFixed(1)}, worldY=${worldY.toFixed(1)}, dist=${distY.toFixed(1)}, inRangeX=${inRangeX}`);
+                            if (distY < 30 && inRangeX) {
+                                isOnAnySplitLine = true;
+                                splitLineInfo = `Horizontal split at Y=${splitY.toFixed(1)}, click Y=${worldY.toFixed(1)}`;
+                                break;
+                            }
+                        }
+                        
+                        // Check vertical split line
+                        if (Math.abs((box1.x + box1.width) - box2.x) < tol || 
+                            Math.abs((box2.x + box2.width) - box1.x) < tol) {
+                            const splitX = Math.abs((box1.x + box1.width) - box2.x) < tol ? 
+                                (box1.x + box1.width) : (box2.x + box2.width);
+                            const minY = Math.max(box1.y, box2.y);
+                            const maxY = Math.min(box1.y + box1.height, box2.y + box2.height);
+                            const distX = Math.abs(worldX - splitX);
+                            const inRangeY = worldY >= minY - 2 && worldY <= maxY + 2;
+                            debugLog(`V-split check: splitX=${splitX.toFixed(1)}, worldX=${worldX.toFixed(1)}, dist=${distX.toFixed(1)}, inRangeY=${inRangeY}`);
+                            if (distX < 30 && inRangeY) {
+                                isOnAnySplitLine = true;
+                                splitLineInfo = `Vertical split at X=${splitX.toFixed(1)}, click X=${worldX.toFixed(1)}`;
+                                break;
+                            }
+                        }
+                    }
+                    if (isOnAnySplitLine) break;
+                }
+                if (isOnAnySplitLine) break;
+            }
+        }
+        
+        if (isOnAnySplitLine) {
+            // Click is on a split line, don't create connection
+            debugLog(`BLOCKED: ${splitLineInfo}`);
+            draw(x, y);
+            return;
+        }
+        
+        // Additional check: if the clicked edge is a shared edge, don't allow connection
+        if (clickedShape instanceof Box && clickedShape.isGroupResize()) {
+            const isShared = clickedShape.isSharedEdge(clickedEdge);
+            debugLog(`isSharedEdge(${clickedEdge}): ${isShared}`);
+            if (isShared) {
+                // This edge is shared with another box in the group (it's a split line)
+                debugLog(`BLOCKED: Edge ${clickedEdge} is shared`);
+                draw(x, y);
+                return;
+            }
+        }
+        
+        debugLog(`ALLOWED: Creating connection from edge ${clickedEdge}`);
+        
         // Edge clicked - clear shape selection when clicking on edge
             selectedShapes.clear();
             selectedConnection = null;
