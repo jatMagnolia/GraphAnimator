@@ -62,6 +62,7 @@ let selectedConnection = null; // Connection being edited
 // Box split preview state
 let splitPreviewBox = null; // Box being hovered over for split preview
 let splitPreviewDirection = null; // 'horizontal' or 'vertical'
+let splitPreviewSide = null; // 'top', 'bottom', 'left', or 'right' - which side gets the new box
 let draggedShapeType = null; // Track what shape is being dragged
 
 // Box groups for split boxes that move together
@@ -237,6 +238,18 @@ class Box extends DrawableObject {
         }
     }
 
+    // Check if an edge is already connected
+    isEdgeConnected(edge) {
+        // Check if this edge is already used in any connection
+        for (const conn of connections) {
+            if ((conn.fromShape === this && conn.fromEdge === edge) ||
+                (conn.toShape === this && conn.toEdge === edge)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
     // Detect which edge was clicked (with some tolerance)
     getEdgeAt(x, y, tolerance = 10) {
         const worldX = x - canvasOffset.x;
@@ -247,20 +260,28 @@ class Box extends DrawableObject {
         const dy = worldY - centerY;
         
         // Check if click is near an edge
+        let detectedEdge = null;
         if (Math.abs(worldX - this.x) < tolerance && Math.abs(dy) < this.height / 2) {
-            return 'left';
-        }
-        if (Math.abs(worldX - (this.x + this.width)) < tolerance && Math.abs(dy) < this.height / 2) {
-            return 'right';
-        }
-        if (Math.abs(worldY - this.y) < tolerance && Math.abs(dx) < this.width / 2) {
-            return 'top';
-        }
-        if (Math.abs(worldY - (this.y + this.height)) < tolerance && Math.abs(dx) < this.width / 2) {
-            return 'bottom';
+            detectedEdge = 'left';
+        } else if (Math.abs(worldX - (this.x + this.width)) < tolerance && Math.abs(dy) < this.height / 2) {
+            detectedEdge = 'right';
+        } else if (Math.abs(worldY - this.y) < tolerance && Math.abs(dx) < this.width / 2) {
+            detectedEdge = 'top';
+        } else if (Math.abs(worldY - (this.y + this.height)) < tolerance && Math.abs(dx) < this.width / 2) {
+            detectedEdge = 'bottom';
         }
         
-        return null;
+        // Don't allow connections on split edges
+        if (detectedEdge && this.splitEdge === detectedEdge) {
+            return null;
+        }
+        
+        // Don't allow connections on already connected edges
+        if (detectedEdge && this.isEdgeConnected(detectedEdge)) {
+            return null;
+        }
+        
+        return detectedEdge;
     }
     
     // Get best edge for connection creation - uses larger zones that don't overlap
@@ -284,19 +305,32 @@ class Box extends DrawableObject {
         
         // Divide into 4 quadrants - each quadrant maps to one edge
         // This ensures non-overlapping zones
+        let proposedEdge;
         if (dx <= 0 && dy <= 0) {
             // Top-left quadrant -> top edge
-            return 'top';
+            proposedEdge = 'top';
         } else if (dx > 0 && dy <= 0) {
             // Top-right quadrant -> right edge
-            return 'right';
+            proposedEdge = 'right';
         } else if (dx <= 0 && dy > 0) {
             // Bottom-left quadrant -> left edge
-            return 'left';
+            proposedEdge = 'left';
         } else {
             // Bottom-right quadrant -> bottom edge
-            return 'bottom';
+            proposedEdge = 'bottom';
         }
+        
+        // Don't allow connections on split edges
+        if (this.splitEdge === proposedEdge) {
+            return null;
+        }
+        
+        // Don't allow connections on already connected edges
+        if (this.isEdgeConnected(proposedEdge)) {
+            return null;
+        }
+        
+        return proposedEdge;
     }
 }
 
@@ -967,17 +1001,34 @@ function draw(mouseX = null, mouseY = null) {
     }
     
     // Draw box split preview
-    if (splitPreviewBox && splitPreviewDirection) {
+    if (splitPreviewBox && splitPreviewDirection && splitPreviewSide) {
         const box = splitPreviewBox;
         const screenX = box.x + canvasOffset.x;
         const screenY = box.y + canvasOffset.y;
         
-        // Draw grey overlay on the box
-        ctx.fillStyle = 'rgba(128, 128, 128, 0.3)'; // Semi-transparent grey
-        ctx.fillRect(screenX, screenY, box.width, box.height);
+        // Calculate a contrasting overlay color based on the box's background color
+        const contrastColor = getContrastColor(box.color);
+        const rgb = hexToRgb(contrastColor);
+        // Use the contrasting color with some transparency for the overlay
+        ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.3)`;
         
-        // Draw split line
-        ctx.strokeStyle = 'rgba(128, 128, 128, 0.8)'; // Darker grey for the line
+        // Draw overlay on the side that will get the new box
+        if (splitPreviewDirection === 'horizontal') {
+            if (splitPreviewSide === 'top') {
+                ctx.fillRect(screenX, screenY, box.width, box.height / 2);
+            } else {
+                ctx.fillRect(screenX, screenY + box.height / 2, box.width, box.height / 2);
+            }
+        } else {
+            if (splitPreviewSide === 'left') {
+                ctx.fillRect(screenX, screenY, box.width / 2, box.height);
+            } else {
+                ctx.fillRect(screenX + box.width / 2, screenY, box.width / 2, box.height);
+            }
+        }
+        
+        // Draw split line using the contrasting color
+        ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`;
         ctx.lineWidth = 3;
         ctx.setLineDash([8, 4]);
         
@@ -1130,6 +1181,7 @@ draggableBox.addEventListener('dragend', () => {
     draggedShapeType = null;
     splitPreviewBox = null;
     splitPreviewDirection = null;
+    splitPreviewSide = null;
     draw();
 });
 
@@ -1200,22 +1252,32 @@ canvasContainer.addEventListener('dragover', (e) => {
         
         if (hoveredBox) {
             splitPreviewBox = hoveredBox;
-            // Determine split direction based on mouse position
+            // Determine split direction and which side based on mouse position
             const worldX = dropX - canvasOffset.x;
             const worldY = dropY - canvasOffset.y;
             const centerX = hoveredBox.x + hoveredBox.width / 2;
             const centerY = hoveredBox.y + hoveredBox.height / 2;
             const relativeX = worldX - centerX;
             const relativeY = worldY - centerY;
-            splitPreviewDirection = Math.abs(relativeY) > Math.abs(relativeX) ? 'horizontal' : 'vertical';
+            const isHorizontalSplit = Math.abs(relativeY) > Math.abs(relativeX);
+            
+            if (isHorizontalSplit) {
+                splitPreviewDirection = 'horizontal';
+                splitPreviewSide = relativeY < 0 ? 'top' : 'bottom';
+            } else {
+                splitPreviewDirection = 'vertical';
+                splitPreviewSide = relativeX < 0 ? 'left' : 'right';
+            }
         } else {
             splitPreviewBox = null;
             splitPreviewDirection = null;
+            splitPreviewSide = null;
         }
         draw();
     } else {
         splitPreviewBox = null;
         splitPreviewDirection = null;
+        splitPreviewSide = null;
     }
 });
 
@@ -1223,6 +1285,7 @@ canvasContainer.addEventListener('dragleave', () => {
     canvasContainer.classList.remove('drag-over');
     splitPreviewBox = null;
     splitPreviewDirection = null;
+    splitPreviewSide = null;
     draw();
 });
 
@@ -1233,6 +1296,7 @@ canvasContainer.addEventListener('drop', (e) => {
     // Clear split preview
     splitPreviewBox = null;
     splitPreviewDirection = null;
+    splitPreviewSide = null;
     draggedShapeType = null;
     
     const shapeType = e.dataTransfer.getData('shapeType');
@@ -1259,7 +1323,7 @@ canvasContainer.addEventListener('drop', (e) => {
             const centerX = targetBox.x + targetBox.width / 2;
             const centerY = targetBox.y + targetBox.height / 2;
             
-            // Determine split direction based on drop position
+            // Determine split direction and which side the mouse is on
             const relativeX = worldX - centerX;
             const relativeY = worldY - centerY;
             const isHorizontalSplit = Math.abs(relativeY) > Math.abs(relativeX);
@@ -1272,22 +1336,47 @@ canvasContainer.addEventListener('drop', (e) => {
             if (isHorizontalSplit) {
                 // Split horizontally (widthwise) - top and bottom boxes
                 const halfHeight = targetBox.height / 2;
+                const isTopSide = relativeY < 0; // Mouse is in top half
                 
-                // Top box (original position, keeps original properties)
-                box1 = new Box(targetBox.x, targetBox.y);
-                box1.width = targetBox.width;
-                box1.height = halfHeight;
-                box1.color = targetBox.color;
-                box1.text = targetBox.text;
-                box1.groupId = groupId;
-                
-                // Bottom box (new box, gets new properties)
-                box2 = new Box(targetBox.x, targetBox.y + halfHeight);
-                box2.width = targetBox.width;
-                box2.height = halfHeight;
-                box2.color = currentColor; // New color from picker
-                box2.text = ''; // Empty text
-                box2.groupId = groupId;
+                if (isTopSide) {
+                    // New box on top, original on bottom
+                    box1 = new Box(targetBox.x, targetBox.y);
+                    box1.width = targetBox.width;
+                    box1.height = halfHeight;
+                    box1.color = currentColor; // New color from picker
+                    box1.text = ''; // Empty text
+                    box1.groupId = groupId;
+                    
+                    box2 = new Box(targetBox.x, targetBox.y + halfHeight);
+                    box2.width = targetBox.width;
+                    box2.height = halfHeight;
+                    box2.color = targetBox.color;
+                    box2.text = targetBox.text;
+                    box2.groupId = groupId;
+                    
+                    // Create connection: top box to bottom box
+                    const connection = new Connection(box1, 'bottom', box2, 'top', 'both', currentColor);
+                    connections.push(connection);
+    } else {
+                    // New box on bottom, original on top (original behavior)
+                    box1 = new Box(targetBox.x, targetBox.y);
+                    box1.width = targetBox.width;
+                    box1.height = halfHeight;
+                    box1.color = targetBox.color;
+                    box1.text = targetBox.text;
+                    box1.groupId = groupId;
+                    
+                    box2 = new Box(targetBox.x, targetBox.y + halfHeight);
+                    box2.width = targetBox.width;
+                    box2.height = halfHeight;
+                    box2.color = currentColor; // New color from picker
+                    box2.text = ''; // Empty text
+                    box2.groupId = groupId;
+                    
+                    // Create connection: top box to bottom box
+                    const connection = new Connection(box1, 'bottom', box2, 'top', 'both', currentColor);
+                    connections.push(connection);
+                }
                 
                 // Remove original box
                 const index = boxes.indexOf(targetBox);
@@ -1295,29 +1384,50 @@ canvasContainer.addEventListener('drop', (e) => {
                 
                 // Add new boxes
                 boxes.push(box1, box2);
-                
-                // Create connection between the two boxes
-                const connection = new Connection(box1, 'bottom', box2, 'top', 'both', currentColor);
-                connections.push(connection);
-    } else {
+            } else {
                 // Split vertically (lengthwise) - left and right boxes
                 const halfWidth = targetBox.width / 2;
+                const isLeftSide = relativeX < 0; // Mouse is in left half
                 
-                // Left box (original position, keeps original properties)
-                box1 = new Box(targetBox.x, targetBox.y);
-                box1.width = halfWidth;
-                box1.height = targetBox.height;
-                box1.color = targetBox.color;
-                box1.text = targetBox.text;
-                box1.groupId = groupId;
-                
-                // Right box (new box, gets new properties)
-                box2 = new Box(targetBox.x + halfWidth, targetBox.y);
-                box2.width = halfWidth;
-                box2.height = targetBox.height;
-                box2.color = currentColor; // New color from picker
-                box2.text = ''; // Empty text
-                box2.groupId = groupId;
+                if (isLeftSide) {
+                    // New box on left, original on right
+                    box1 = new Box(targetBox.x, targetBox.y);
+                    box1.width = halfWidth;
+                    box1.height = targetBox.height;
+                    box1.color = currentColor; // New color from picker
+                    box1.text = ''; // Empty text
+                    box1.groupId = groupId;
+                    
+                    box2 = new Box(targetBox.x + halfWidth, targetBox.y);
+                    box2.width = halfWidth;
+                    box2.height = targetBox.height;
+                    box2.color = targetBox.color;
+                    box2.text = targetBox.text;
+                    box2.groupId = groupId;
+                    
+                    // Create connection: left box to right box
+                    const connection = new Connection(box1, 'right', box2, 'left', 'both', currentColor);
+                    connections.push(connection);
+                } else {
+                    // New box on right, original on left (original behavior)
+                    box1 = new Box(targetBox.x, targetBox.y);
+                    box1.width = halfWidth;
+                    box1.height = targetBox.height;
+                    box1.color = targetBox.color;
+                    box1.text = targetBox.text;
+                    box1.groupId = groupId;
+                    
+                    box2 = new Box(targetBox.x + halfWidth, targetBox.y);
+                    box2.width = halfWidth;
+                    box2.height = targetBox.height;
+                    box2.color = currentColor; // New color from picker
+                    box2.text = ''; // Empty text
+                    box2.groupId = groupId;
+                    
+                    // Create connection: left box to right box
+                    const connection = new Connection(box1, 'right', box2, 'left', 'both', currentColor);
+                    connections.push(connection);
+                }
                 
                 // Remove original box
                 const index = boxes.indexOf(targetBox);
@@ -1325,10 +1435,6 @@ canvasContainer.addEventListener('drop', (e) => {
                 
                 // Add new boxes
                 boxes.push(box1, box2);
-                
-                // Create connection between the two boxes
-                const connection = new Connection(box1, 'right', box2, 'left', 'both', currentColor);
-                connections.push(connection);
             }
         } else {
             // Normal box placement
