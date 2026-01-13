@@ -29,6 +29,11 @@ let dragOffset = { x: 0, y: 0 };
 let dragStartPos = { x: 0, y: 0 }; // Store initial drag position
 let dragStartShapes = []; // Store initial positions of shapes when drag starts
 let dragStartLassoPoints = null; // Store initial lasso points when drag starts
+let isResizing = false; // True when resizing an object
+let resizeHandle = null; // Which handle is being dragged: 'nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'
+let resizeStartPos = { x: 0, y: 0 }; // Initial mouse position when resize starts
+let resizeStartShape = null; // The shape being resized
+let resizeStartBounds = { x: 0, y: 0, width: 0, height: 0 }; // Initial bounds when resize starts
 let isPanning = false;
 let panStart = { x: 0, y: 0 };
 let panOffset = { x: 0, y: 0 };
@@ -131,6 +136,38 @@ class Box extends DrawableObject {
     getBounds() {
         return { x: this.x, y: this.y, width: this.width, height: this.height };
     }
+    
+    // Get resize handle positions (8 handles: corners and midpoints)
+    getResizeHandles() {
+        const screenX = this.x + canvasOffset.x;
+        const screenY = this.y + canvasOffset.y;
+        const w = this.width;
+        const h = this.height;
+        return {
+            'nw': { x: screenX, y: screenY },
+            'n': { x: screenX + w / 2, y: screenY },
+            'ne': { x: screenX + w, y: screenY },
+            'e': { x: screenX + w, y: screenY + h / 2 },
+            'se': { x: screenX + w, y: screenY + h },
+            's': { x: screenX + w / 2, y: screenY + h },
+            'sw': { x: screenX, y: screenY + h },
+            'w': { x: screenX, y: screenY + h / 2 }
+        };
+    }
+    
+    // Check if a point is on a resize handle
+    getResizeHandleAt(x, y, handleSize = 8) {
+        // Use padded handles if available (from drawResizeHandles), otherwise use object bounds
+        const handles = this._paddedResizeHandles || this.getResizeHandles();
+        for (const [handleName, handlePos] of Object.entries(handles)) {
+            const dx = x - handlePos.x;
+            const dy = y - handlePos.y;
+            if (Math.abs(dx) <= handleSize && Math.abs(dy) <= handleSize) {
+                return handleName;
+            }
+        }
+        return null;
+    }
 
     // Get the edge point based on edge name ('top', 'bottom', 'left', 'right')
     getEdgePoint(edge) {
@@ -211,11 +248,13 @@ class Box extends DrawableObject {
     }
 }
 
-// Circle class
+// Circle class (supports ellipses via radiusX and radiusY)
 class Circle extends DrawableObject {
     constructor(x, y) {
         super(x, y);
-        this.radius = 40;
+        this.radius = 40; // Default radius for backward compatibility
+        this.radiusX = 40; // Horizontal radius (for ellipses)
+        this.radiusY = 40; // Vertical radius (for ellipses)
         this.color = currentColor;
         this.text = '';
     }
@@ -223,7 +262,23 @@ class Circle extends DrawableObject {
     draw(isSelected = false) {
         ctx.fillStyle = this.color;
         ctx.beginPath();
-        ctx.arc(this.x + canvasOffset.x + this.radius, this.y + canvasOffset.y + this.radius, this.radius, 0, Math.PI * 2);
+        // Use ellipse if radiusX != radiusY, otherwise use circle
+        if (this.radiusX !== this.radiusY) {
+            ctx.ellipse(
+                this.x + canvasOffset.x + this.radiusX,
+                this.y + canvasOffset.y + this.radiusY,
+                this.radiusX,
+                this.radiusY,
+                0, 0, Math.PI * 2
+            );
+        } else {
+            ctx.arc(
+                this.x + canvasOffset.x + this.radiusX,
+                this.y + canvasOffset.y + this.radiusY,
+                this.radiusX,
+                0, Math.PI * 2
+            );
+        }
         ctx.fill();
         
         ctx.strokeStyle = isSelected ? '#48bb78' : '#333';
@@ -239,7 +294,7 @@ class Circle extends DrawableObject {
         ctx.textBaseline = 'middle';
         
         // Handle text overflow - truncate if too long
-        const maxWidth = this.radius * 1.8;
+        const maxWidth = Math.min(this.radiusX, this.radiusY) * 1.8;
         let displayText = this.text;
         const metrics = ctx.measureText(displayText);
         if (metrics.width > maxWidth) {
@@ -250,37 +305,74 @@ class Circle extends DrawableObject {
             displayText = displayText + '...';
         }
         
-            ctx.fillText(displayText, this.x + canvasOffset.x + this.radius, this.y + canvasOffset.y + this.radius);
+            ctx.fillText(displayText, this.x + canvasOffset.x + this.radiusX, this.y + canvasOffset.y + this.radiusY);
         }
     }
 
     contains(x, y) {
         const worldX = x - canvasOffset.x;
         const worldY = y - canvasOffset.y;
-        const centerX = this.x + this.radius;
-        const centerY = this.y + this.radius;
-        const dx = worldX - centerX;
-        const dy = worldY - centerY;
-        return Math.sqrt(dx * dx + dy * dy) <= this.radius;
+        const centerX = this.x + this.radiusX;
+        const centerY = this.y + this.radiusY;
+        const dx = (worldX - centerX) / this.radiusX;
+        const dy = (worldY - centerY) / this.radiusY;
+        return (dx * dx + dy * dy) <= 1; // Ellipse equation
     }
     
     getBounds() {
-        return { x: this.x, y: this.y, width: this.radius * 2, height: this.radius * 2 };
+        return {
+            x: this.x,
+            y: this.y,
+            width: this.radiusX * 2,
+            height: this.radiusY * 2
+        };
+    }
+    
+    // Get resize handle positions (8 handles: corners and midpoints)
+    getResizeHandles() {
+        const screenX = this.x + canvasOffset.x;
+        const screenY = this.y + canvasOffset.y;
+        const w = this.radiusX * 2;
+        const h = this.radiusY * 2;
+        return {
+            'nw': { x: screenX, y: screenY },
+            'n': { x: screenX + w / 2, y: screenY },
+            'ne': { x: screenX + w, y: screenY },
+            'e': { x: screenX + w, y: screenY + h / 2 },
+            'se': { x: screenX + w, y: screenY + h },
+            's': { x: screenX + w / 2, y: screenY + h },
+            'sw': { x: screenX, y: screenY + h },
+            'w': { x: screenX, y: screenY + h / 2 }
+        };
+    }
+    
+    // Check if a point is on a resize handle
+    getResizeHandleAt(x, y, handleSize = 8) {
+        // Use padded handles if available (from drawResizeHandles), otherwise use object bounds
+        const handles = this._paddedResizeHandles || this.getResizeHandles();
+        for (const [handleName, handlePos] of Object.entries(handles)) {
+            const dx = x - handlePos.x;
+            const dy = y - handlePos.y;
+            if (Math.abs(dx) <= handleSize && Math.abs(dy) <= handleSize) {
+                return handleName;
+            }
+        }
+        return null;
     }
 
     // Get the edge point based on edge name ('top', 'bottom', 'left', 'right')
     getEdgePoint(edge) {
-        const centerX = this.x + this.radius;
-        const centerY = this.y + this.radius;
+        const centerX = this.x + this.radiusX;
+        const centerY = this.y + this.radiusY;
         switch(edge) {
             case 'top':
                 return { x: centerX, y: this.y };
             case 'bottom':
-                return { x: centerX, y: this.y + this.radius * 2 };
+                return { x: centerX, y: this.y + this.radiusY * 2 };
             case 'left':
                 return { x: this.x, y: centerY };
             case 'right':
-                return { x: this.x + this.radius * 2, y: centerY };
+                return { x: this.x + this.radiusX * 2, y: centerY };
             default:
                 return { x: centerX, y: centerY };
         }
@@ -290,14 +382,17 @@ class Circle extends DrawableObject {
     getEdgeAt(x, y, tolerance = 10) {
         const worldX = x - canvasOffset.x;
         const worldY = y - canvasOffset.y;
-        const centerX = this.x + this.radius;
-        const centerY = this.y + this.radius;
+        const centerX = this.x + this.radiusX;
+        const centerY = this.y + this.radiusY;
         const dx = worldX - centerX;
         const dy = worldY - centerY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
+        // For ellipse, check distance along the ellipse edge
+        const normalizedDx = dx / this.radiusX;
+        const normalizedDy = dy / this.radiusY;
+        const distance = Math.sqrt(normalizedDx * normalizedDx + normalizedDy * normalizedDy);
         
-        // Check if click is near the edge of the circle
-        if (Math.abs(distance - this.radius) < tolerance) {
+        // Check if click is near the edge of the ellipse
+        if (Math.abs(distance - 1) * Math.min(this.radiusX, this.radiusY) < tolerance) {
             // Determine which edge based on angle
             const angle = Math.atan2(dy, dx);
             const angleDeg = (angle * 180 / Math.PI + 360) % 360;
@@ -321,15 +416,17 @@ class Circle extends DrawableObject {
     getBestEdgeForConnection(x, y) {
         const worldX = x - canvasOffset.x;
         const worldY = y - canvasOffset.y;
-        const centerX = this.x + this.radius;
-        const centerY = this.y + this.radius;
+        const centerX = this.x + this.radiusX;
+        const centerY = this.y + this.radiusY;
         const dx = worldX - centerX;
         const dy = worldY - centerY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
+        const normalizedDx = dx / this.radiusX;
+        const normalizedDy = dy / this.radiusY;
+        const distance = Math.sqrt(normalizedDx * normalizedDx + normalizedDy * normalizedDy);
         
-        // Check if point is within the circle bounds (with some padding)
-        const padding = 20;
-        if (distance > this.radius + padding) {
+        // Check if point is within the ellipse bounds (with some padding)
+        const padding = 20 / Math.min(this.radiusX, this.radiusY);
+        if (distance > 1 + padding) {
             return null;
         }
         
@@ -395,6 +492,40 @@ class TextObject extends DrawableObject {
         ctx.font = `${this.fontSize}px sans-serif`;
         const metrics = ctx.measureText(this.text);
         return { x: this.x, y: this.y, width: metrics.width, height: this.fontSize };
+    }
+    
+    // Get resize handle positions (8 handles: corners and midpoints)
+    getResizeHandles() {
+        ctx.font = `${this.fontSize}px sans-serif`;
+        const metrics = ctx.measureText(this.text);
+        const screenX = this.x + canvasOffset.x;
+        const screenY = this.y + canvasOffset.y;
+        const w = metrics.width;
+        const h = this.fontSize;
+        return {
+            'nw': { x: screenX, y: screenY },
+            'n': { x: screenX + w / 2, y: screenY },
+            'ne': { x: screenX + w, y: screenY },
+            'e': { x: screenX + w, y: screenY + h / 2 },
+            'se': { x: screenX + w, y: screenY + h },
+            's': { x: screenX + w / 2, y: screenY + h },
+            'sw': { x: screenX, y: screenY + h },
+            'w': { x: screenX, y: screenY + h / 2 }
+        };
+    }
+    
+    // Check if a point is on a resize handle
+    getResizeHandleAt(x, y, handleSize = 8) {
+        // Use padded handles if available (from drawResizeHandles), otherwise use object bounds
+        const handles = this._paddedResizeHandles || this.getResizeHandles();
+        for (const [handleName, handlePos] of Object.entries(handles)) {
+            const dx = x - handlePos.x;
+            const dy = y - handlePos.y;
+            if (Math.abs(dx) <= handleSize && Math.abs(dy) <= handleSize) {
+                return handleName;
+            }
+        }
+        return null;
     }
 }
 
@@ -614,6 +745,50 @@ function getContrastColor(backgroundColor) {
     return luminance > 0.5 ? '#000000' : '#FFFFFF';
 }
 
+// Draw resize handles and outline box for a selected object
+function drawResizeHandles(shape) {
+    const bounds = shape.getBounds();
+    const padding = 20; // Padding around the object - large enough to avoid overlap with connection edge zones
+    const screenX = bounds.x + canvasOffset.x - padding;
+    const screenY = bounds.y + canvasOffset.y - padding;
+    const boxWidth = bounds.width + (padding * 2);
+    const boxHeight = bounds.height + (padding * 2);
+    
+    // Draw outline box (bigger than the object)
+    ctx.strokeStyle = '#48bb78';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(screenX, screenY, boxWidth, boxHeight);
+    ctx.setLineDash([]);
+    
+    // Draw resize handles at the corners and midpoints of the padded outline box
+    // Store handles in shape for detection (we'll update getResizeHandleAt to use padded positions)
+    const handles = {
+        'nw': { x: screenX, y: screenY },
+        'n': { x: screenX + boxWidth / 2, y: screenY },
+        'ne': { x: screenX + boxWidth, y: screenY },
+        'e': { x: screenX + boxWidth, y: screenY + boxHeight / 2 },
+        'se': { x: screenX + boxWidth, y: screenY + boxHeight },
+        's': { x: screenX + boxWidth / 2, y: screenY + boxHeight },
+        'sw': { x: screenX, y: screenY + boxHeight },
+        'w': { x: screenX, y: screenY + boxHeight / 2 }
+    };
+    
+    // Store padded handles on shape temporarily for detection
+    shape._paddedResizeHandles = handles;
+    
+    ctx.fillStyle = '#48bb78';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    
+    for (const handlePos of Object.values(handles)) {
+        ctx.beginPath();
+        ctx.arc(handlePos.x, handlePos.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    }
+}
+
 // Draw all objects
 function draw(mouseX = null, mouseY = null) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -655,6 +830,10 @@ function draw(mouseX = null, mouseY = null) {
             ctx.arc(edgePoint.x + canvasOffset.x, edgePoint.y + canvasOffset.y, 6, 0, Math.PI * 2);
             ctx.fill();
         }
+        // Draw resize handles if selected
+        if (selectedShapes.has(box) && selectedShapes.size === 1) {
+            drawResizeHandles(box);
+        }
     });
     
     // Draw all circles with edge highlighting
@@ -688,11 +867,19 @@ function draw(mouseX = null, mouseY = null) {
             ctx.arc(edgePoint.x + canvasOffset.x, edgePoint.y + canvasOffset.y, 6, 0, Math.PI * 2);
             ctx.fill();
         }
+        // Draw resize handles if selected
+        if (selectedShapes.has(circle) && selectedShapes.size === 1) {
+            drawResizeHandles(circle);
+        }
     });
     
     // Draw all text objects
     textObjects.forEach(textObj => {
         textObj.draw(selectedShapes.has(textObj));
+        // Draw resize handles if selected
+        if (selectedShapes.has(textObj) && selectedShapes.size === 1) {
+            drawResizeHandles(textObj);
+        }
     });
     
     // Draw pending connection preview
@@ -1019,6 +1206,30 @@ canvas.addEventListener('mousedown', (e) => {
         return;
     }
     
+    // Check for resize handle clicks (only when single object is selected)
+    if (currentTool === 'select' && selectedShapes.size === 1) {
+        const selectedShape = Array.from(selectedShapes)[0];
+        if (selectedShape instanceof Box || selectedShape instanceof Circle || selectedShape instanceof TextObject) {
+            const handle = selectedShape.getResizeHandleAt(x, y);
+            if (handle) {
+                isResizing = true;
+                resizeHandle = handle;
+                resizeStartPos.x = x;
+                resizeStartPos.y = y;
+                resizeStartShape = selectedShape;
+                const bounds = selectedShape.getBounds();
+                resizeStartBounds = {
+                    x: bounds.x,
+                    y: bounds.y,
+                    width: bounds.width,
+                    height: bounds.height
+                };
+                draw(x, y);
+                return;
+            }
+        }
+    }
+    
         // Check if clicking on an edge (only for boxes and circles, only with select tool)
     let clickedShape = null;
     let clickedEdge = null;
@@ -1161,8 +1372,8 @@ canvas.addEventListener('mousedown', (e) => {
             
             // Adjust drag offset for circles
             if (clickedObject instanceof Circle) {
-                dragOffset.x -= clickedObject.radius;
-                dragOffset.y -= clickedObject.radius;
+                dragOffset.x -= clickedObject.radiusX;
+                dragOffset.y -= clickedObject.radiusY;
             }
             
         canvas.style.cursor = 'grabbing';
@@ -1231,6 +1442,128 @@ canvas.addEventListener('mousemove', (e) => {
         return;
     }
     
+    // Handle resizing
+    if (isResizing && resizeStartShape) {
+        const deltaX = (x - resizeStartPos.x);
+        const deltaY = (y - resizeStartPos.y);
+        const handle = resizeHandle;
+        
+        if (resizeStartShape instanceof Box) {
+            let newX = resizeStartBounds.x;
+            let newY = resizeStartBounds.y;
+            let newWidth = resizeStartBounds.width;
+            let newHeight = resizeStartBounds.height;
+            
+            // Adjust based on which handle is being dragged
+            if (handle.includes('w')) {
+                newX += deltaX;
+                newWidth -= deltaX;
+            }
+            if (handle.includes('e')) {
+                newWidth += deltaX;
+            }
+            if (handle.includes('n')) {
+                newY += deltaY;
+                newHeight -= deltaY;
+            }
+            if (handle.includes('s')) {
+                newHeight += deltaY;
+            }
+            
+            // Ensure minimum size
+            if (newWidth < 20) {
+                if (handle.includes('w')) newX -= (20 - newWidth);
+                newWidth = 20;
+            }
+            if (newHeight < 20) {
+                if (handle.includes('n')) newY -= (20 - newHeight);
+                newHeight = 20;
+            }
+            
+            resizeStartShape.x = newX;
+            resizeStartShape.y = newY;
+            resizeStartShape.width = newWidth;
+            resizeStartShape.height = newHeight;
+        } else if (resizeStartShape instanceof Circle) {
+            let newX = resizeStartBounds.x;
+            let newY = resizeStartBounds.y;
+            let newWidth = resizeStartBounds.width;
+            let newHeight = resizeStartBounds.height;
+            
+            // Adjust based on which handle is being dragged
+            if (handle.includes('w')) {
+                newX += deltaX;
+                newWidth -= deltaX;
+            }
+            if (handle.includes('e')) {
+                newWidth += deltaX;
+            }
+            if (handle.includes('n')) {
+                newY += deltaY;
+                newHeight -= deltaY;
+            }
+            if (handle.includes('s')) {
+                newHeight += deltaY;
+            }
+            
+            // Ensure minimum size
+            if (newWidth < 20) {
+                if (handle.includes('w')) newX -= (20 - newWidth);
+                newWidth = 20;
+            }
+            if (newHeight < 20) {
+                if (handle.includes('n')) newY -= (20 - newHeight);
+                newHeight = 20;
+            }
+            
+            resizeStartShape.x = newX;
+            resizeStartShape.y = newY;
+            resizeStartShape.radiusX = newWidth / 2;
+            resizeStartShape.radiusY = newHeight / 2;
+            resizeStartShape.radius = Math.min(resizeStartShape.radiusX, resizeStartShape.radiusY); // For backward compatibility
+        } else if (resizeStartShape instanceof TextObject) {
+            let newX = resizeStartBounds.x;
+            let newY = resizeStartBounds.y;
+            let newWidth = resizeStartBounds.width;
+            let newHeight = resizeStartBounds.height;
+            
+            // Adjust based on which handle is being dragged
+            if (handle.includes('w')) {
+                newX += deltaX;
+                newWidth -= deltaX;
+            }
+            if (handle.includes('e')) {
+                newWidth += deltaX;
+            }
+            if (handle.includes('n')) {
+                newY += deltaY;
+                newHeight -= deltaY;
+            }
+            if (handle.includes('s')) {
+                newHeight += deltaY;
+            }
+            
+            // Ensure minimum size
+            if (newWidth < 20) {
+                if (handle.includes('w')) newX -= (20 - newWidth);
+                newWidth = 20;
+            }
+            if (newHeight < 10) {
+                if (handle.includes('n')) newY -= (10 - newHeight);
+                newHeight = 10;
+            }
+            
+            resizeStartShape.x = newX;
+            resizeStartShape.y = newY;
+            // For text, resize primarily affects font size (height)
+            // Width is determined by text content, so we adjust font size based on height
+            resizeStartShape.fontSize = Math.max(10, Math.round(newHeight));
+        }
+        
+        draw(x, y);
+        return;
+    }
+    
     if (isDragging && (selectedShapes.size > 0 || selectedConnections.size > 0)) {
         // Calculate movement delta from initial click position (in screen coordinates)
         // Since shapes use world coordinates, we need to account for canvas offset
@@ -1249,8 +1582,8 @@ canvas.addEventListener('mousemove', (e) => {
                 
                 // Keep within reasonable bounds (optional)
                 if (shape instanceof Circle) {
-                    shape.x = Math.max(-shape.radius * 2, shape.x);
-                    shape.y = Math.max(-shape.radius * 2, shape.y);
+                    shape.x = Math.max(-shape.radiusX * 2, shape.x);
+                    shape.y = Math.max(-shape.radiusY * 2, shape.y);
                 } else if (shape instanceof Box) {
                     shape.x = Math.max(-shape.width, shape.x);
                     shape.y = Math.max(-shape.height, shape.y);
@@ -1279,10 +1612,31 @@ canvas.addEventListener('mousemove', (e) => {
             isPointInPolygon(x, y, completedLassoPoints) && 
             (selectedShapes.size > 0 || selectedConnections.size > 0)) {
             canvas.style.cursor = 'grab';
-        } else {
+    } else {
             canvas.style.cursor = 'crosshair';
         }
     } else {
+        // Check if hovering over resize handle
+        let hoveringResizeHandle = false;
+        if (currentTool === 'select' && selectedShapes.size === 1) {
+            const selectedShape = Array.from(selectedShapes)[0];
+            if (selectedShape instanceof Box || selectedShape instanceof Circle || selectedShape instanceof TextObject) {
+                const handle = selectedShape.getResizeHandleAt(x, y);
+                if (handle) {
+                    hoveringResizeHandle = true;
+                    // Set cursor based on handle position
+                    const cursorMap = {
+                        'nw': 'nw-resize', 'n': 'n-resize', 'ne': 'ne-resize',
+                        'e': 'e-resize', 'se': 'se-resize', 's': 's-resize',
+                        'sw': 'sw-resize', 'w': 'w-resize'
+                    };
+                    canvas.style.cursor = cursorMap[handle] || 'default';
+                    draw(x, y);
+                    return;
+                }
+            }
+        }
+        
         // Check if hovering over edge
         let hoveringEdge = false;
         const useConnectionMode = pendingEdgeSelection !== null;
@@ -1406,6 +1760,9 @@ canvas.addEventListener('mouseup', (e) => {
     
     isDragging = false;
     isPanning = false;
+    isResizing = false;
+    resizeHandle = null;
+    resizeStartShape = null;
     dragStartLassoPoints = null; // Reset lasso points reference
     canvas.style.cursor = currentTool === 'lasso' ? 'crosshair' : 'default';
 });
@@ -1413,6 +1770,9 @@ canvas.addEventListener('mouseup', (e) => {
 canvas.addEventListener('mouseleave', () => {
     isDragging = false;
     isPanning = false;
+    isResizing = false;
+    resizeHandle = null;
+    resizeStartShape = null;
     dragStartLassoPoints = null; // Reset lasso points reference
     if (isLassoActive) {
         isLassoActive = false;
